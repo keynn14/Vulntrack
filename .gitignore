@@ -1,0 +1,28 @@
+## .NET / Visual Studio
+bin/
+obj/
+.vs/
+*.user
+*.suo
+*.userosscache
+*.sln.docstates
+*.cache
+TestResults/
+*.trx
+*.coverage
+*.coveragexml
+
+## Secrets / Local overrides
+appsettings.Local.json
+.env
+.env.*
+
+## Python (bridge/)
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+
+## OS
+.DS_Store
+Thumbs.db

@@ -1,0 +1,77 @@
+<header class="vc-topbar">
+    <div class="vc-topbar__left">
+        <label for="vc-nav-toggle" class="vc-burger" aria-label="Open navigation">
+            <i class="bi bi-list" aria-hidden="true"></i>
+        </label>
+        <div class="vc-topbar__titles">
+            <h1 class="vc-topbar__title">@Title</h1>
+            @if (!string.IsNullOrWhiteSpace(Subtitle))
+            {
+                <p class="vc-topbar__sub">@Subtitle</p>
+            }
+        </div>
+    </div>
+
+    <div class="vc-topbar__right">
+        <div class="vc-search">
+            <i class="bi bi-search" aria-hidden="true"></i>
+            <input type="search" placeholder="Search CVE, asset or owner" aria-label="Search" />
+            <kbd>Ctrl K</kbd>
+        </div>
+
+        <span class="vc-pill vc-pill--ok">
+            <span class="vc-dot vc-dot--ok" aria-hidden="true"></span>
+            Greenbone: Connected
+        </span>
+
+        @{
+            var unread = DummyData.UnreadAlertCount;
+        }
+        <a href="/alerts" class="vc-bell" aria-label="Alerts, @unread unread" title="Alerts">
+            <i class="bi bi-bell" aria-hidden="true"></i>
+            @if (unread > 0)
+            {
+                <span class="vc-bell__count">@unread</span>
+            }
+        </a>
+
+        @if (Actions is not null)
+        {
+            @Actions
+        }
+
+        @if (!string.IsNullOrWhiteSpace(PrimaryText))
+        {
+            if (!string.IsNullOrWhiteSpace(PrimaryHref))
+            {
+                <a href="@PrimaryHref" class="vc-btn vc-btn--primary">
+                    @if (!string.IsNullOrWhiteSpace(PrimaryIcon))
+                    {
+                        <i class="bi @PrimaryIcon" aria-hidden="true"></i>
+                    }
+                    <span>@PrimaryText</span>
+                </a>
+            }
+            else
+            {
+                <button type="button" class="vc-btn vc-btn--primary" @onclick="OnPrimary">
+                    @if (!string.IsNullOrWhiteSpace(PrimaryIcon))
+                    {
+                        <i class="bi @PrimaryIcon" aria-hidden="true"></i>
+                    }
+                    <span>@PrimaryText</span>
+                </button>
+            }
+        }
+    </div>
+</header>
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter] public string? Subtitle { get; set; }
+    [Parameter] public string? PrimaryText { get; set; }
+    [Parameter] public string? PrimaryIcon { get; set; }
+    [Parameter] public string? PrimaryHref { get; set; }
+    [Parameter] public EventCallback OnPrimary { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+}

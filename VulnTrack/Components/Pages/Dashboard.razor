@@ -1,0 +1,560 @@
+@page "/dashboard"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject VulnTrackDataService DataService
+@inject IDbContextFactory<AppDbContext> DbFactory
+@using Microsoft.EntityFrameworkCore
+@using System.Security.Claims
+
+<PageTitle>Dashboard | VulnTrack</PageTitle>
+
+<PageHeader Title="Dashboard"
+            Subtitle="@(_isOwner ? "Findings on assets you own" : $"Security posture across {_assetCount} assets · live DB_Vulntrack data")"
+            PrimaryText="@(_isOwner ? null : "Import scan")"
+            PrimaryIcon="bi-cloud-arrow-up"
+            PrimaryHref="/import" />
+
+<div class="vc-page vc-dash">
+    @if (_overdueCount > 0)
+    {
+        <section class="vc-banner" aria-label="SLA alert summary">
+            <div class="vc-banner__left">
+                <div class="vc-banner__icon" aria-hidden="true">
+                    <i class="bi bi-exclamation-octagon"></i>
+                </div>
+                <div>
+                    <p class="vc-banner__title">@_bannerHeadline</p>
+                    <div class="vc-banner__sla">
+                        <span>SLA rules</span>
+                        <span class="vc-sla-chip">Critical 7d</span>
+                        <span class="vc-sla-chip">High 14d</span>
+                        <span class="vc-sla-chip">Medium 30d</span>
+                    </div>
+                </div>
+            </div>
+            <a class="vc-btn vc-btn--primary" href="/vulnerabilities?filter=overdue">View overdue</a>
+        </section>
+    }
+    else
+    {
+        <section class="vc-banner vc-banner--ok" aria-label="SLA alert summary">
+            <div class="vc-banner__left">
+                <div class="vc-banner__icon" aria-hidden="true">
+                    <i class="bi bi-check2-circle"></i>
+                </div>
+                <div>
+                    <p class="vc-banner__title">No findings currently breach SLA</p>
+                    <div class="vc-banner__sla">
+                        <span>SLA rules</span>
+                        <span class="vc-sla-chip">Critical 7d</span>
+                        <span class="vc-sla-chip">High 14d</span>
+                        <span class="vc-sla-chip">Medium 30d</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+    }
+
+    <section class="vc-summary-grid" aria-label="Key metrics">
+        @if (_isOwner)
+        {
+            <SummaryCard Title="My open findings"
+                         Value="@_totalOpen.ToString()"
+                         Icon="bi-shield-exclamation"
+                         Tone="neutral"
+                         Href="/vulnerabilities" />
+            <SummaryCard Title="Critical"
+                         Value="@_criticalCount.ToString()"
+                         Icon="bi-exclamation-triangle"
+                         Tone="critical"
+                         Href="/vulnerabilities?severity=critical" />
+            <SummaryCard Title="Overdue"
+                         Value="@_overdueCount.ToString()"
+                         Icon="bi-alarm"
+                         Tone="warning"
+                         Href="/vulnerabilities?filter=overdue" />
+            <SummaryCard Title="Awaiting verification"
+                         Value="@_awaitingCount.ToString()"
+                         Icon="bi-patch-check"
+                         Tone="success" />
+        }
+        else
+        {
+            <SummaryCard Title="Total open"
+                         Value="@_totalOpen.ToString()"
+                         Icon="bi-shield-exclamation"
+                         Tone="neutral"
+                         Delta="Live from DB_Vulntrack"
+                         DeltaGood="true"
+                         Trend="_openSpark"
+                         Href="/vulnerabilities" />
+            <SummaryCard Title="Critical"
+                         Value="@_criticalCount.ToString()"
+                         Icon="bi-exclamation-triangle"
+                         Tone="critical"
+                         Delta="@($"{_criticalOlderThan7} older than 7d")"
+                         DeltaGood="@(_criticalOlderThan7 == 0)"
+                         Trend="_critSpark"
+                         Href="/vulnerabilities?severity=critical" />
+            <SummaryCard Title="Overdue"
+                         Value="@_overdueCount.ToString()"
+                         Icon="bi-alarm"
+                         Tone="warning"
+                         Delta="Past SLA due date"
+                         DeltaGood="@(_overdueCount == 0)"
+                         Trend="_overdueSpark"
+                         Href="/vulnerabilities?filter=overdue" />
+            <SummaryCard Title="Closed this month"
+                         Value="@_closedThisMonth.ToString()"
+                         Icon="bi-check2-circle"
+                         Tone="success"
+                         Delta="Verified by rescan"
+                         DeltaGood="true"
+                         Trend="_closedSpark"
+                         Href="/reports" />
+        }
+    </section>
+
+    <div class="vc-dash__grid">
+        <div class="vc-dash__main">
+            <div class="vc-dash__charts">
+                <section class="vc-card">
+                    <div class="vc-card__head">
+                        <h2>Findings by severity</h2>
+                    </div>
+                    <div class="vc-donut-wrap">
+                        <DonutChart Segments="_severitySegments"
+                                    CenterValue="@_totalOpen.ToString()"
+                                    CenterLabel="open" />
+                        <ul class="vc-legend">
+                            @foreach (var seg in _severitySegments)
+                            {
+                                <li class="vc-legend__item">
+                                    <span class="vc-legend__dot" style="background-color:@seg.Color" aria-hidden="true"></span>
+                                    <span class="vc-legend__lbl">@seg.Label</span>
+                                    <span class="vc-legend__val">@seg.Value.ToString("0")</span>
+                                </li>
+                            }
+                        </ul>
+                    </div>
+                </section>
+
+                <section class="vc-card">
+                    <div class="vc-card__head">
+                        <h2>Findings by status</h2>
+                    </div>
+                    <div class="vc-status-bars">
+                        @foreach (var row in _statusBars)
+                        {
+                            var pct = _statusTotal > 0 ? Math.Round(row.Count * 100.0 / _statusTotal, 1) : 0;
+                            <div>
+                                <div class="vc-status-bar__row">
+                                    <span>@row.Label</span>
+                                    <span class="vc-status-bar__count">@row.Count</span>
+                                </div>
+                                <div class="vc-progress" aria-hidden="true">
+                                    <div class="vc-progress__fill"
+                                         style="width:@(pct.ToString("0.#", System.Globalization.CultureInfo.InvariantCulture))%;background-color:@row.Color"></div>
+                                </div>
+                            </div>
+                        }
+                    </div>
+                    <p class="vc-card__note">Findings close only after a Greenbone rescan verifies the fix.</p>
+                </section>
+
+                @if (!_isOwner)
+                {
+                    <section class="vc-card vc-chart-card--wide">
+                        <div class="vc-card__head">
+                            <h2>Open vs closed over time</h2>
+                            <div class="vc-line-legend">
+                                <span>
+                                    <span class="vc-legend__dot" style="background-color:#C0392B" aria-hidden="true"></span>
+                                    Opened
+                                </span>
+                                <span>
+                                    <span class="vc-legend__dot" style="background-color:#14968C" aria-hidden="true"></span>
+                                    Closed
+                                </span>
+                            </div>
+                        </div>
+                        <LineChart Labels="_weekLabels" Series="_trendSeries" />
+                    </section>
+                }
+            </div>
+
+            <section class="vc-card">
+                <div class="vc-card__head">
+                    <h2>Top critical findings</h2>
+                    <a class="vc-link" href="/vulnerabilities">View all <i class="bi bi-arrow-right" aria-hidden="true"></i></a>
+                </div>
+
+                <FilterBar>
+                    <FilterChip Label="Critical only"
+                                Icon="bi-exclamation-triangle"
+                                Active="_criticalOnly"
+                                OnClick="ToggleCriticalOnly" />
+                    <FilterChip Label="@(_sortByCvss ? "Sort: CVSS" : "Sort: Due date")"
+                                Icon="bi-arrow-down-up"
+                                Active="_sortByCvss"
+                                OnClick="ToggleSortMode" />
+                    <FilterChip Label="Overdue first"
+                                Icon="bi-alarm"
+                                Active="_overdueFirst"
+                                OnClick="ToggleOverdueFirst" />
+                </FilterBar>
+
+                <DataTable TItem="VulnerabilityEntity"
+                           Items="_tableRows"
+                           Loading="_loading"
+                           PageSize="5"
+                           Caption="Top critical findings"
+                           EmptyTitle="No critical findings"
+                           EmptyMessage="Nothing matches the current filters.">
+                    <Columns>
+                        <DataColumn TItem="VulnerabilityEntity" Title="CVE / Title" SortBy="v => v.CveId">
+                            <Template Context="v">
+                                <div class="vc-cell-finding">
+                                    <a class="vc-link vc-cell-cve" href="/vulnerabilities/@v.Id">@v.CveId</a>
+                                    <div class="vc-cell-title" title="@v.Title">@v.Title</div>
+                                </div>
+                            </Template>
+                        </DataColumn>
+
+                        <DataColumn TItem="VulnerabilityEntity" Title="Severity" SortBy="v => (int)v.Severity">
+                            <Template Context="v">
+                                <SeverityBadge Severity="v.Severity.ToUiSeverity()" />
+                            </Template>
+                        </DataColumn>
+
+                        <DataColumn TItem="VulnerabilityEntity" Title="CVSS" SortBy="v => v.CvssScore">
+                            <Template Context="v">
+                                <span class="vc-cell-cvss">@v.CvssScore.ToString("0.0")</span>
+                            </Template>
+                        </DataColumn>
+
+                        <DataColumn TItem="VulnerabilityEntity" Title="Asset / Owner" SortBy="v => v.Asset.Hostname">
+                            <Template Context="v">
+                                <div class="vc-mono">@v.Asset.Hostname</div>
+                                <div class="vc-cell-sub">@(v.Owner?.FullName ?? "Unassigned")</div>
+                            </Template>
+                        </DataColumn>
+
+                        <DataColumn TItem="VulnerabilityEntity" Title="Due" SortBy="v => v.DueDate">
+                            <Template Context="v">
+                                @{
+                                    var now = DateTime.UtcNow;
+                                }
+                                <div>@v.DueDate.ToString("d MMM")</div>
+                                @if (v.IsOverdueUtc(now))
+                                {
+                                    <span class="vc-due vc-due--over">@v.DaysOverdueUtc(now) days overdue</span>
+                                }
+                                else if (v.Status == VulnerabilityStatus.FixedAwaitingVerification)
+                                {
+                                    <span class="vc-due">Awaiting rescan</span>
+                                }
+                                else
+                                {
+                                    var left = Math.Max(0, (int)(v.DueDate.Date - now.Date).TotalDays);
+                                    <span class="vc-due">@(left == 0 ? "Due today" : left == 1 ? "1 day left" : $"{left} days left")</span>
+                                }
+                            </Template>
+                        </DataColumn>
+
+                        <DataColumn TItem="VulnerabilityEntity" Title="Status" SortBy="v => (int)v.Status">
+                            <Template Context="v">
+                                <StatusBadge Status="v.Status.ToUiStatus()" />
+                            </Template>
+                        </DataColumn>
+                    </Columns>
+                </DataTable>
+            </section>
+        </div>
+
+        <aside class="vc-dash__side" aria-label="@(_isOwner ? "Remediation queue" : "Remediation and verification queues")">
+            <section class="vc-card">
+                <div class="vc-card__head">
+                    <div class="vc-card__title-group">
+                        <h2>Overdue remediation</h2>
+                        <span class="vc-count-pill">@_overdueCount</span>
+                    </div>
+                    <a class="vc-link" href="/vulnerabilities?filter=overdue">View all</a>
+                </div>
+
+                @if (_loading)
+                {
+                    <div class="vc-skel-list" aria-busy="true">
+                        @for (var i = 0; i < 4; i++)
+                        {
+                            <div class="vc-skel-row"></div>
+                        }
+                    </div>
+                }
+                else if (_overdue.Count == 0)
+                {
+                    <EmptyState Icon="bi-check2-circle"
+                                Title="No overdue findings"
+                                Message="Everything is within SLA." />
+                }
+                else
+                {
+                    <div class="vc-side-list">
+                        @foreach (var item in _overdue)
+                        {
+                            var nudged = _nudgedIds.Contains(item.Id);
+                            <div class="vc-overdue-item">
+                                <div class="vc-overdue-item__info">
+                                    <div class="vc-overdue-item__top">
+                                        <SeverityBadge Severity="item.Severity.ToUiSeverity()" ShowDot="true" />
+                                        <a class="vc-overdue-item__cve" href="/vulnerabilities/@item.Id">@item.CveId</a>
+                                    </div>
+                                    <div class="vc-overdue-item__meta">@item.Asset.Hostname · @(item.Owner?.FullName ?? "Unassigned")</div>
+                                    <div class="vc-overdue-item__days">@item.DaysOverdueUtc(DateTime.UtcNow) days overdue</div>
+                                </div>
+
+                                @if (_isOwner)
+                                {
+                                    <a class="vc-link" href="/vulnerabilities/@item.Id">View</a>
+                                }
+                                else
+                                {
+                                    <button type="button"
+                                            class="vc-btn vc-btn--secondary vc-btn--sm"
+                                            disabled="@nudged"
+                                            @onclick="() => NudgeAsync(item)">
+                                        <i class="bi bi-bell" aria-hidden="true"></i>
+                                        <span>@(nudged ? "Nudged" : "Nudge")</span>
+                                    </button>
+                                }
+                            </div>
+                        }
+                    </div>
+                }
+            </section>
+
+            @if (!_isOwner)
+            {
+                <section class="vc-card">
+                    <div class="vc-card__head">
+                        <div class="vc-card__title-group">
+                            <h2>Verification queue</h2>
+                            <span class="vc-count-pill">@_awaitingCount</span>
+                        </div>
+                        <a class="vc-link" href="/verification">Review</a>
+                    </div>
+
+                    @if (_loading)
+                    {
+                        <div class="vc-skel-list" aria-busy="true">
+                            @for (var i = 0; i < 4; i++)
+                            {
+                                <div class="vc-skel-row"></div>
+                            }
+                        </div>
+                    }
+                    else if (_verificationQueue.Count == 0)
+                    {
+                        <EmptyState Icon="bi-patch-check"
+                                    Title="Queue is clear"
+                                    Message="No findings are waiting for rescan verification." />
+                    }
+                    else
+                    {
+                        <div class="vc-side-list">
+                            @foreach (var item in _verificationQueue)
+                            {
+                                <div class="vc-queue-item">
+                                    <div class="vc-queue-item__top">
+                                        <div>
+                                            <a class="vc-overdue-item__cve" href="/vulnerabilities/@item.Id">@item.CveId</a>
+                                            <span class="vc-cell-sub"> · @item.Asset.Hostname</span>
+                                        </div>
+                                        <StatusBadge Status="item.Status.ToUiStatus()" />
+                                    </div>
+                                    <div class="vc-queue-item__meta">
+                                        Marked fixed @((item.FixedAt ?? item.LastSeenAt).ToString("d MMM")) · waiting for rescan
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                        <p class="vc-card__note">Imports never close findings. A rescan must confirm each fix.</p>
+                    }
+                </section>
+            }
+        </aside>
+    </div>
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    private sealed record StatusBarRow(string Label, int Count, string Color);
+
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _isOwner;
+    private string _currentUserId = "";
+    private bool _loading = true;
+
+    private bool _criticalOnly = true;
+    private bool _sortByCvss = true;
+    private bool _overdueFirst;
+
+    private int _assetCount;
+    private int _totalOpen;
+    private int _criticalCount;
+    private int _overdueCount;
+    private int _criticalOlderThan7;
+    private int _closedThisMonth;
+    private int _awaitingCount;
+    private string _bannerHeadline = "";
+
+    private List<VulnerabilityEntity> _scope = new();
+    private List<VulnerabilityEntity> _tableRows = new();
+    private List<VulnerabilityEntity> _overdue = new();
+    private List<VulnerabilityEntity> _verificationQueue = new();
+    private readonly HashSet<int> _nudgedIds = new();
+
+    private IReadOnlyList<ChartSegment> _severitySegments = Array.Empty<ChartSegment>();
+    private IReadOnlyList<StatusBarRow> _statusBars = Array.Empty<StatusBarRow>();
+    private int _statusTotal;
+    private IReadOnlyList<string> _weekLabels = Array.Empty<string>();
+    private IReadOnlyList<ChartSeries> _trendSeries = Array.Empty<ChartSeries>();
+
+    private readonly double[] _openSpark = { 29, 28, 27, 26, 25, 24, 24 };
+    private readonly double[] _critSpark = { 9, 9, 8, 8, 8, 7, 7 };
+    private readonly double[] _overdueSpark = { 6, 7, 7, 8, 8, 9, 9 };
+    private readonly double[] _closedSpark = { 1, 1, 2, 2, 3, 4, 4 };
+
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState;
+        _isOwner = auth.User.IsInRole(Roles.AssetOwner);
+        _currentUserId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "";
+
+        await using var db = await DbFactory.CreateDbContextAsync();
+        _assetCount = await db.Assets.CountAsync(a => a.IsActive);
+
+        _scope = await DataService.GetVulnerabilitiesAsync(_currentUserId, _isOwner);
+        ComputeMetrics();
+        BuildTable();
+        _loading = false;
+    }
+
+    private void ComputeMetrics()
+    {
+        var now = DateTime.UtcNow;
+        var monthStart = new DateTime(now.Year, now.Month, 1, 0, 0, 0, DateTimeKind.Utc);
+        var active = _scope.Where(v => v.Status is VulnerabilityStatus.Open or VulnerabilityStatus.InProgress or VulnerabilityStatus.FixedAwaitingVerification).ToList();
+        var overdueAll = _scope.Where(v => v.IsOverdueUtc(now)).OrderByDescending(v => v.DaysOverdueUtc(now)).ToList();
+        var verifyAll = _scope.Where(v => v.Status == VulnerabilityStatus.FixedAwaitingVerification).OrderByDescending(v => v.FixedAt).ToList();
+
+        _totalOpen = active.Count;
+        _criticalCount = active.Count(v => v.Severity == VulnerabilitySeverity.Critical);
+        _overdueCount = overdueAll.Count;
+        _criticalOlderThan7 = overdueAll.Count(v => v.Severity == VulnerabilitySeverity.Critical && v.DaysOverdueUtc(now) >= 7);
+        _closedThisMonth = _scope.Count(v => v.Status == VulnerabilityStatus.Closed && v.ClosedAt >= monthStart);
+        _awaitingCount = verifyAll.Count;
+
+        _overdue = overdueAll.Take(5).ToList();
+        _verificationQueue = verifyAll.Take(4).ToList();
+
+        _bannerHeadline = _isOwner
+            ? $"{_overdueCount} of your findings breach SLA, {_criticalOlderThan7} critical older than 7 days"
+            : $"{_overdueCount} findings breach SLA, {_criticalOlderThan7} critical older than 7 days";
+
+        _severitySegments = new[]
+        {
+            new ChartSegment("Critical", active.Count(v => v.Severity == VulnerabilitySeverity.Critical), "#C0392B"),
+            new ChartSegment("High", active.Count(v => v.Severity == VulnerabilitySeverity.High), "#E67E22"),
+            new ChartSegment("Medium", active.Count(v => v.Severity == VulnerabilitySeverity.Medium), "#F1C40F"),
+            new ChartSegment("Low", active.Count(v => v.Severity == VulnerabilitySeverity.Low), "#3498DB"),
+            new ChartSegment("Info", active.Count(v => v.Severity == VulnerabilitySeverity.Info), "#95A5A6")
+        };
+
+        _statusBars = new[]
+        {
+            new StatusBarRow("Open", _scope.Count(v => v.Status == VulnerabilityStatus.Open), "#C0392B"),
+            new StatusBarRow("In Progress", _scope.Count(v => v.Status == VulnerabilityStatus.InProgress), "#E67E22"),
+            new StatusBarRow("Fixed, awaiting verification", _scope.Count(v => v.Status == VulnerabilityStatus.FixedAwaitingVerification), "#2F6FB3"),
+            new StatusBarRow("Closed", _scope.Count(v => v.Status == VulnerabilityStatus.Closed), "#1E8E5A"),
+            new StatusBarRow("Accepted Risk", _scope.Count(v => v.Status == VulnerabilityStatus.AcceptedRisk), "#7F8C8D")
+        };
+        _statusTotal = Math.Max(1, _scope.Count);
+
+        // 12-week open vs closed trend from DB timestamps
+        var labels = new List<string>(12);
+        var opened = new double[12];
+        var closed = new double[12];
+        var week0 = now.Date.AddDays(-(int)now.DayOfWeek);
+
+        for (var i = 0; i < 12; i++)
+        {
+            var start = week0.AddDays(-7 * (11 - i));
+            var end = start.AddDays(7);
+            labels.Add(start.ToString("d MMM"));
+            opened[i] = _scope.Count(v => v.DetectedAt >= start && v.DetectedAt < end);
+            closed[i] = _scope.Count(v => v.ClosedAt.HasValue && v.ClosedAt.Value >= start && v.ClosedAt.Value < end);
+        }
+
+        _weekLabels = labels;
+        _trendSeries = new[]
+        {
+            new ChartSeries("Opened", opened, "#C0392B"),
+            new ChartSeries("Closed", closed, "#14968C")
+        };
+    }
+
+    private void BuildTable()
+    {
+        var now = DateTime.UtcNow;
+        var q = _scope.Where(v => v.Status is VulnerabilityStatus.Open or VulnerabilityStatus.InProgress or VulnerabilityStatus.FixedAwaitingVerification);
+
+        q = _criticalOnly
+            ? q.Where(v => v.Severity == VulnerabilitySeverity.Critical)
+            : q.Where(v => v.Severity is VulnerabilitySeverity.Critical or VulnerabilitySeverity.High);
+
+        if (_overdueFirst)
+        {
+            q = _sortByCvss
+                ? q.OrderByDescending(v => v.IsOverdueUtc(now)).ThenByDescending(v => v.CvssScore).ThenByDescending(v => v.DaysOverdueUtc(now))
+                : q.OrderByDescending(v => v.IsOverdueUtc(now)).ThenBy(v => v.DueDate).ThenByDescending(v => v.CvssScore);
+        }
+        else
+        {
+            q = _sortByCvss
+                ? q.OrderByDescending(v => v.CvssScore).ThenByDescending(v => v.DaysOverdueUtc(now))
+                : q.OrderBy(v => v.DueDate).ThenByDescending(v => v.CvssScore);
+        }
+
+        _tableRows = q.ToList();
+    }
+
+    private void ToggleCriticalOnly()
+    {
+        _criticalOnly = !_criticalOnly;
+        BuildTable();
+    }
+
+    private void ToggleSortMode()
+    {
+        _sortByCvss = !_sortByCvss;
+        BuildTable();
+    }
+
+    private void ToggleOverdueFirst()
+    {
+        _overdueFirst = !_overdueFirst;
+        BuildTable();
+    }
+
+    private async Task NudgeAsync(VulnerabilityEntity item)
+    {
+        await DataService.NudgeOverdueAsync(item.Id, _currentUserId);
+        _nudgedIds.Add(item.Id);
+        _toast?.Show($"Reminder sent to {item.Owner?.FullName ?? "owner"} for {item.CveId}", ToastKind.Success);
+    }
+}

@@ -1,0 +1,157 @@
+@page "/alerts"
+@rendermode InteractiveServer
+@attribute [Authorize]
+
+<PageTitle>Alerts | VulnTrack</PageTitle>
+
+<PageHeader Title="Alerts"
+            Subtitle="SLA breaches, critical scan imports, rescan outcomes, and import errors"
+            PrimaryText="Mark all as read"
+            PrimaryIcon="bi-check2-all"
+            OnPrimary="MarkAllRead" />
+
+<div class="vc-page">
+    <section class="vc-card">
+        <div class="vc-tabs" role="tablist" aria-label="Filter alerts">
+            <button type="button" role="tab" class="vc-tab @(_tab == "all" ? "is-active" : "")" aria-selected="@(_tab == "all")" @onclick='() => _tab = "all"'>
+                All <span class="vc-count-pill">@DummyData.Alerts.Count</span>
+            </button>
+            <button type="button" role="tab" class="vc-tab @(_tab == "unread" ? "is-active" : "")" aria-selected="@(_tab == "unread")" @onclick='() => _tab = "unread"'>
+                Unread <span class="vc-count-pill">@DummyData.UnreadAlertCount</span>
+            </button>
+            <button type="button" role="tab" class="vc-tab @(_tab == "critical" ? "is-active" : "")" aria-selected="@(_tab == "critical")" @onclick='() => _tab = "critical"'>
+                Critical <span class="vc-count-pill">@DummyData.Alerts.Count(a => a.Severity == Severity.Critical)</span>
+            </button>
+            <button type="button" role="tab" class="vc-tab @(_tab == "overdue" ? "is-active" : "")" aria-selected="@(_tab == "overdue")" @onclick='() => _tab = "overdue"'>
+                Overdue <span class="vc-count-pill">@DummyData.Alerts.Count(a => a.Type == AlertType.SlaOverdue)</span>
+            </button>
+        </div>
+
+        @{
+            var items = FilteredAlerts();
+        }
+
+        @if (_loading)
+        {
+            <div class="vc-skel-list" style="margin-top:16px" aria-busy="true">
+                @for (var i = 0; i < 4; i++)
+                {
+                    <div class="vc-skel-row"></div>
+                }
+            </div>
+        }
+        else if (items.Count == 0)
+        {
+            <div style="padding:24px 0">
+                <EmptyState Icon="bi-bell-slash"
+                            Title="No alerts in this view"
+                            Message="You're all caught up for this filter." />
+            </div>
+        }
+        else
+        {
+            <ul class="vc-alert-list">
+                @foreach (var alert in items)
+                {
+                    <li class="vc-alert-item @(alert.IsRead ? "" : "is-unread")">
+                        <span class="vc-scard__icon @IconTone(alert.Type)" aria-hidden="true">
+                            <i class="bi @IconFor(alert.Type)"></i>
+                        </span>
+
+                        <div class="vc-alert-item__body">
+                            <div class="vc-alert-item__top">
+                                @if (!alert.IsRead)
+                                {
+                                    <span class="vc-unread-dot" aria-label="Unread"></span>
+                                }
+                                <strong>@alert.Title</strong>
+                                <span class="vc-cell-sub">@TimeAgo(alert.CreatedAt)</span>
+                            </div>
+                            <p class="vc-alert-item__msg">@alert.Message</p>
+                        </div>
+
+                        <div class="vc-action-row">
+                            @if (!alert.IsRead)
+                            {
+                                <button type="button" class="vc-btn vc-btn--ghost vc-btn--sm" @onclick="() => MarkRead(alert)">Mark read</button>
+                            }
+                            <a class="vc-btn vc-btn--secondary vc-btn--sm" href="@alert.Link" @onclick="() => MarkRead(alert)">Open</a>
+                        </div>
+                    </li>
+                }
+            </ul>
+        }
+    </section>
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    private static readonly DateTime RefNow = new(2026, 11, 23, 14, 0, 0);
+
+    private bool _loading = true;
+    private string _tab = "all";
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        if (RendererInfo.IsInteractive)
+        {
+            await Task.Delay(180);
+            _loading = false;
+        }
+    }
+
+    private List<AlertItem> FilteredAlerts()
+    {
+        IEnumerable<AlertItem> q = DummyData.Alerts;
+        q = _tab switch
+        {
+            "unread" => q.Where(a => !a.IsRead),
+            "critical" => q.Where(a => a.Severity == Severity.Critical),
+            "overdue" => q.Where(a => a.Type == AlertType.SlaOverdue),
+            _ => q
+        };
+        return q.OrderByDescending(a => a.CreatedAt).ToList();
+    }
+
+    private void MarkRead(AlertItem item)
+    {
+        item.IsRead = true;
+    }
+
+    private void MarkAllRead()
+    {
+        foreach (var a in DummyData.Alerts)
+        {
+            a.IsRead = true;
+        }
+        _toast?.Show("All alerts marked as read.", ToastKind.Info);
+    }
+
+    private static string IconFor(AlertType type) => type switch
+    {
+        AlertType.CriticalImported => "bi-shield-exclamation",
+        AlertType.SlaOverdue => "bi-alarm",
+        AlertType.RescanResult => "bi-patch-check",
+        AlertType.ImportFailed => "bi-exclamation-octagon",
+        _ => "bi-bell"
+    };
+
+    private static string IconTone(AlertType type) => type switch
+    {
+        AlertType.CriticalImported => "vc-scard__icon--critical",
+        AlertType.SlaOverdue => "vc-scard__icon--warning",
+        AlertType.RescanResult => "vc-scard__icon--success",
+        AlertType.ImportFailed => "vc-scard__icon--critical",
+        _ => "vc-scard__icon--neutral"
+    };
+
+    private static string TimeAgo(DateTime dt)
+    {
+        var diff = RefNow - dt;
+        if (diff.TotalMinutes < 60) return $"{Math.Max(1, (int)diff.TotalMinutes)}m ago";
+        if (diff.TotalHours < 24) return $"{(int)diff.TotalHours}h ago";
+        return $"{(int)diff.TotalDays}d ago";
+    }
+}

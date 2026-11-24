@@ -1,0 +1,62 @@
+<div class="vc-toast-stack" role="status" aria-live="polite">
+    @foreach (var item in _items)
+    {
+        <div class="vc-toast vc-toast--@item.Kind.ToString().ToLowerInvariant()">
+            <i class="bi @IconFor(item.Kind) vc-toast__icon" aria-hidden="true"></i>
+            <span class="vc-toast__msg">@item.Message</span>
+            <button type="button"
+                    class="vc-toast__close"
+                    aria-label="Dismiss notification"
+                    @onclick="() => Dismiss(item.Id)">
+                <i class="bi bi-x" aria-hidden="true"></i>
+            </button>
+        </div>
+    }
+</div>
+
+@code {
+    private sealed record ToastEntry(Guid Id, string Message, ToastKind Kind);
+
+    private readonly List<ToastEntry> _items = new();
+
+    public void Show(string message, ToastKind kind = ToastKind.Success)
+    {
+        var entry = new ToastEntry(Guid.NewGuid(), message, kind);
+        _items.Add(entry);
+        StateHasChanged();
+
+        _ = AutoDismissAsync(entry.Id);
+    }
+
+    private async Task AutoDismissAsync(Guid id)
+    {
+        try
+        {
+            await Task.Delay(4000);
+            await InvokeAsync(() => Dismiss(id));
+        }
+        catch
+        {
+            // Ignore disposal during circuit shutdown.
+        }
+    }
+
+    private void Dismiss(Guid id)
+    {
+        var idx = _items.FindIndex(x => x.Id == id);
+        if (idx >= 0)
+        {
+            _items.RemoveAt(idx);
+            StateHasChanged();
+        }
+    }
+
+    private static string IconFor(ToastKind kind) => kind switch
+    {
+        ToastKind.Success => "bi-check-circle-fill",
+        ToastKind.Info => "bi-info-circle-fill",
+        ToastKind.Warning => "bi-exclamation-triangle-fill",
+        ToastKind.Error => "bi-exclamation-octagon-fill",
+        _ => "bi-check-circle-fill"
+    };
+}

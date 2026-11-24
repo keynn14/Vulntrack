@@ -1,0 +1,481 @@
+@page "/import"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Administrator,Security Analyst")]
+@inject IImportService ImportService
+@inject VulnTrackDataService DataService
+@inject GreenboneBridgeClient BridgeClient
+@inject GreenboneScanQueue ScanQueue
+@inject IJSRuntime JS
+@using System.Security.Claims
+@using System.Text
+@using VulnTrack.Services.Greenbone
+
+<PageTitle>Import Scan | VulnTrack</PageTitle>
+
+<PageHeader Title="Import Scan"
+            Subtitle="Upload Greenbone XML/CSV reports or queue an authorized bridge scan"
+            PrimaryText="Queue Greenbone scan"
+            PrimaryIcon="bi-cloud-arrow-up"
+            OnPrimary="QueueLiveScanAsync" />
+
+<div class="vc-page">
+    <section class="vc-card vc-conn-card" aria-label="Greenbone scanner connection">
+        <div class="vc-conn-card__top">
+            <div class="vc-conn-card__meta">
+                <div class="vc-conn-card__title">
+                    <h2>Greenbone Bridge Connection</h2>
+                    <span class="vc-pill vc-pill--ok">
+                        <span class="vc-dot vc-dot--ok" aria-hidden="true"></span>
+                        Ready
+                    </span>
+                </div>
+                <div class="vc-conn-card__stats">
+                    <span><strong>Last import:</strong> @(_batches.FirstOrDefault()?.CompletedAt?.ToString("d MMM yyyy, HH:mm") ?? "Never")</span>
+                    <span><strong>New (last batch):</strong> @(_batches.FirstOrDefault()?.NewCount ?? 0)</span>
+                    <span><strong>Closed via rescan:</strong> @(_batches.FirstOrDefault()?.ClosedCount ?? 0)</span>
+                </div>
+            </div>
+        </div>
+        <div class="vc-notice">
+            <i class="bi bi-shield-check" aria-hidden="true"></i>
+            <span>Only authorized scans. Duplicates merge on CVE + asset + port. Missing Open/In Progress findings move to Fixed, awaiting verification (never auto-closed).</span>
+        </div>
+    </section>
+
+    <div class="vc-grid-2">
+        <section class="vc-card">
+            <div class="vc-card__head">
+                <h2>Import from Greenbone</h2>
+            </div>
+
+            <div class="vc-form-grid">
+                <div class="vc-field">
+                    <label for="gb-task">Target / Task</label>
+                    <select id="gb-task" class="vc-input" @bind="_selectedTask">
+                        <option value="Weekly internal sweep">Weekly internal sweep</option>
+                        <option value="Perimeter VPN rescan">Perimeter VPN rescan</option>
+                        <option value="Radiology critical segment">Radiology critical segment</option>
+                    </select>
+                </div>
+
+                <div class="vc-checks">
+                    <label class="vc-check">
+                        <input type="checkbox" @bind="_autoAssignOwners" />
+                        <span>Auto-assign owners by asset registry</span>
+                    </label>
+                    <label class="vc-check">
+                        <input type="checkbox" @bind="_applySlaDueDates" />
+                        <span>Apply SLA due dates</span>
+                    </label>
+                    <label class="vc-check">
+                        <input type="checkbox" @bind="_includeInfo" />
+                        <span>Include info-level</span>
+                    </label>
+                </div>
+
+                <div class="vc-btn-row">
+                    <button type="button"
+                            class="vc-btn vc-btn--primary"
+                            disabled="@_importing"
+                            @onclick="QueueLiveScanAsync">
+                        <i class="bi bi-cloud-arrow-down" aria-hidden="true"></i>
+                        <span>Queue live bridge scan</span>
+                    </button>
+                    <button type="button"
+                            class="vc-btn vc-btn--secondary"
+                            disabled="@(_importing || _testingConn)"
+                            @onclick="TestBridgeAsync">
+                        <i class="bi bi-plug" aria-hidden="true"></i>
+                        <span>@(_testingConn ? "Testing..." : "Test connection")</span>
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <section class="vc-card">
+            <div class="vc-card__head">
+                <h2>Upload scan file</h2>
+            </div>
+
+            <div class="vc-dropzone @(_bufferedBytes is not null ? "has-file" : "")">
+                <i class="bi bi-file-earmark-arrow-up vc-dropzone__icon" aria-hidden="true"></i>
+                <p class="vc-dropzone__title">Drag and drop Greenbone XML or CSV export</p>
+                <p class="vc-dropzone__sub">Accepted formats: .xml, .csv · Maximum size 50 MB (XXE-protected)</p>
+                <InputFile OnChange="OnFileSelectedAsync" accept=".xml,.csv" class="vc-dropzone__input" aria-label="Select scan file" />
+            </div>
+
+            @if (_selectedFileName is not null)
+            {
+                <div class="vc-file-meta">
+                    <div>
+                        <i class="bi bi-file-earmark-code" aria-hidden="true"></i>
+                        <strong>@_selectedFileName</strong>
+                    </div>
+                    <span class="vc-cell-sub">@FormatBytes(_selectedFileSize)</span>
+                </div>
+            }
+
+            @if (_preview is not null)
+            {
+                <div class="vc-notice" style="margin-top:12px">
+                    <i class="bi bi-check2-circle" aria-hidden="true"></i>
+                    <span>
+                        Validation summary: <strong>@_preview.UniqueFindingCount</strong> unique findings across
+                        <strong>@_preview.HostCount</strong> host(s)
+                        (@_preview.DuplicateCount duplicate(s) will merge on CVE + asset + port).
+                    </span>
+                </div>
+            }
+
+            @if (!string.IsNullOrWhiteSpace(_validationError))
+            {
+                <p class="vc-validation vc-validation--err">
+                    <i class="bi bi-exclamation-circle" aria-hidden="true"></i>
+                    <span>@_validationError</span>
+                </p>
+            }
+
+            @if (_importing)
+            {
+                <div class="vc-import-prog" style="margin-top:12px" aria-live="polite">
+                    <div class="vc-import-prog__row">
+                        <span>@_progressMessage</span>
+                        <span>@_importPercent%</span>
+                    </div>
+                    <div class="vc-progress">
+                        <div class="vc-progress__fill" style="width:@_importPercent%;background-color:#14968C"></div>
+                    </div>
+                </div>
+            }
+
+            <div class="vc-btn-row" style="margin-top:16px">
+                <button type="button"
+                        class="vc-btn vc-btn--primary"
+                        disabled="@(_importing || _bufferedBytes is null || _preview is null)"
+                        @onclick="RunFileImportAsync">
+                    <i class="bi bi-check2-square" aria-hidden="true"></i>
+                    <span>@(_importing ? "Importing..." : "Validate and import file")</span>
+                </button>
+            </div>
+        </section>
+    </div>
+
+    <section class="vc-card" style="margin-top:20px">
+        <div class="vc-card__head">
+            <h2>Import history</h2>
+            <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="ExportHistoryCsvAsync">
+                <i class="bi bi-download" aria-hidden="true"></i>
+                <span>Export log</span>
+            </button>
+        </div>
+
+        <FilterBar ShowSearch="true"
+                   SearchText="@_search"
+                   SearchTextChanged="OnSearchChanged"
+                   Placeholder="Search file, target, or status" />
+
+        <DataTable TItem="ImportBatchEntity"
+                   Items="_filteredBatches"
+                   Loading="_loading"
+                   PageSize="5"
+                   Caption="Import history"
+                   EmptyIcon="bi-cloud-arrow-up"
+                   EmptyTitle="No scans imported yet"
+                   EmptyMessage="No scans imported yet. Connect Greenbone or upload your first file.">
+            <Columns>
+                <DataColumn TItem="ImportBatchEntity" Title="Date" SortBy="r => r.StartedAt">
+                    <Template Context="r">
+                        <div>@r.StartedAt.ToString("d MMM yyyy")</div>
+                        <div class="vc-cell-sub">@r.StartedAt.ToString("HH:mm") UTC</div>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="ImportBatchEntity" Title="Source" SortBy="r => r.Source">
+                    <Template Context="r">
+                        <div class="vc-cell-cve">@(r.Source == ImportSource.GreenboneApi ? "Greenbone API" : "Manual upload")</div>
+                        <div class="vc-cell-sub">@r.FileName</div>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="ImportBatchEntity" Title="Findings" SortBy="r => r.TotalFindings">
+                    <Template Context="r">
+                        <span class="vc-cell-cvss">@r.TotalFindings</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="ImportBatchEntity" Title="Delta" SortBy="r => r.NewCount">
+                    <Template Context="r">
+                        <span>+@r.NewCount new · @r.UpdatedCount upd · @r.MarkedForVerificationCount verify · @r.ClosedCount closed@(r.ReopenedCount > 0 ? $" · {r.ReopenedCount} reopened" : "")</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="ImportBatchEntity" Title="Status" SortBy="r => r.Status">
+                    <Template Context="r">
+                        <span class="vc-status @ImportStatusClass(r.Status)">@r.Status</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="ImportBatchEntity" Title="Actions">
+                    <Template Context="r">
+                        <div class="vc-action-row">
+                            <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => _viewingBatch = r">View</button>
+                            <button type="button"
+                                    class="vc-btn vc-btn--secondary vc-btn--sm"
+                                    disabled="@(r.Status is ImportStatus.Failed or ImportStatus.RolledBack)"
+                                    @onclick="() => PromptRollback(r)">
+                                Rollback
+                            </button>
+                        </div>
+                    </Template>
+                </DataColumn>
+            </Columns>
+        </DataTable>
+    </section>
+
+    <ConfirmModal @bind-Visible="_showRollbackModal"
+                  Title="Rollback scan import"
+                  Message="@($"Rollback {_rollbackTarget?.FileName} (Batch #{_rollbackTarget?.Id})? Findings created by this batch will be removed and changed statuses restored.")"
+                  ConfirmText="Rollback import"
+                  Danger="true"
+                  OnConfirm="ConfirmRollbackAsync" />
+
+    @if (_viewingBatch is not null)
+    {
+        <div class="vc-modal-backdrop" @onclick="() => _viewingBatch = null">
+            <div class="vc-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+                <div class="vc-modal__head">
+                    <h2 class="vc-modal__title">Import batch #@_viewingBatch.Id</h2>
+                    <button type="button" class="vc-icon-btn" aria-label="Close" @onclick="() => _viewingBatch = null">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="vc-modal__body">
+                    <dl class="vc-kv-list">
+                        <div><dt>File</dt><dd>@_viewingBatch.FileName</dd></div>
+                        <div><dt>Target</dt><dd>@_viewingBatch.TargetName</dd></div>
+                        <div><dt>Imported by</dt><dd>@(_viewingBatch.ImportedBy?.FullName ?? _viewingBatch.ImportedByUserId)</dd></div>
+                        <div><dt>Started</dt><dd>@_viewingBatch.StartedAt.ToString("d MMM yyyy HH:mm") UTC</dd></div>
+                        <div><dt>Status</dt><dd>@_viewingBatch.Status</dd></div>
+                        @if (!string.IsNullOrWhiteSpace(_viewingBatch.ErrorMessage))
+                        {
+                            <div><dt>Notes / Error</dt><dd>@_viewingBatch.ErrorMessage</dd></div>
+                        }
+                    </dl>
+                </div>
+                <div class="vc-modal__foot">
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick="() => _viewingBatch = null">Close</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    private const long MaxFileBytes = 50L * 1024 * 1024;
+
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loading = true;
+    private string _currentUserId = "";
+    private string _selectedTask = "Weekly internal sweep";
+    private bool _autoAssignOwners = true;
+    private bool _applySlaDueDates = true;
+    private bool _includeInfo;
+
+    private bool _importing;
+    private bool _testingConn;
+    private int _importPercent;
+    private string _progressMessage = "";
+
+    private string? _selectedFileName;
+    private long _selectedFileSize;
+    private byte[]? _bufferedBytes;
+    private ImportPreview? _preview;
+    private string? _validationError;
+
+    private string? _search;
+    private List<ImportBatchEntity> _batches = new();
+    private List<ImportBatchEntity> _filteredBatches = new();
+
+    private bool _showRollbackModal;
+    private ImportBatchEntity? _rollbackTarget;
+    private ImportBatchEntity? _viewingBatch;
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState;
+        _currentUserId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "";
+        await ReloadBatchesAsync();
+        _loading = false;
+    }
+
+    private async Task ReloadBatchesAsync()
+    {
+        _batches = await DataService.GetImportBatchesAsync();
+        ApplySearch();
+    }
+
+    private void ApplySearch()
+    {
+        IEnumerable<ImportBatchEntity> q = _batches;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            q = q.Where(r =>
+                r.FileName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                r.TargetName.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                r.Status.ToString().Contains(term, StringComparison.OrdinalIgnoreCase));
+        }
+        _filteredBatches = q.ToList();
+    }
+
+    private void OnSearchChanged(string? val)
+    {
+        _search = val;
+        ApplySearch();
+    }
+
+    private async Task TestBridgeAsync()
+    {
+        _testingConn = true;
+        var (ok, msg) = await BridgeClient.TestConnectionAsync();
+        _testingConn = false;
+        _toast?.Show(msg, ok ? ToastKind.Success : ToastKind.Warning);
+    }
+
+    private async Task QueueLiveScanAsync()
+    {
+        await ScanQueue.EnqueueAsync(new ScanJobRequest(
+            TargetName: _selectedTask,
+            Hosts: new[] { "10.20.0.4" },
+            RequestedByUserId: _currentUserId,
+            Options: new ImportOptions(_autoAssignOwners, _applySlaDueDates, _includeInfo, ImportSource.GreenboneApi)));
+
+        _toast?.Show($"Queued authorized Greenbone scan for '{_selectedTask}'. Results will import automatically when Done.", ToastKind.Info);
+    }
+
+    private async Task OnFileSelectedAsync(InputFileChangeEventArgs e)
+    {
+        _preview = null;
+        _validationError = null;
+        _bufferedBytes = null;
+
+        var file = e.File;
+        _selectedFileName = file.Name;
+        _selectedFileSize = file.Size;
+
+        var ext = Path.GetExtension(file.Name).ToLowerInvariant();
+        if (ext is not (".xml" or ".csv"))
+        {
+            _validationError = "Unsupported file type. Upload a Greenbone .xml or .csv export.";
+            return;
+        }
+        if (file.Size > MaxFileBytes)
+        {
+            _validationError = "File exceeds the 50 MB limit.";
+            return;
+        }
+
+        try
+        {
+            await using var s = file.OpenReadStream(MaxFileBytes);
+            using var ms = new MemoryStream();
+            await s.CopyToAsync(ms);
+            _bufferedBytes = ms.ToArray();
+
+            using var previewStream = new MemoryStream(_bufferedBytes, writable: false);
+            var opts = new ImportOptions(_autoAssignOwners, _applySlaDueDates, _includeInfo, ImportSource.ManualUpload);
+            _preview = await ImportService.PreviewAsync(previewStream, file.Name, opts);
+        }
+        catch (Exception ex)
+        {
+            _bufferedBytes = null;
+            _validationError = ex.Message;
+        }
+    }
+
+    private async Task RunFileImportAsync()
+    {
+        if (_bufferedBytes is null || _selectedFileName is null || _importing) return;
+        _importing = true;
+        _importPercent = 5;
+        _progressMessage = "Starting import...";
+        StateHasChanged();
+
+        var progress = new Progress<ImportProgress>(p =>
+        {
+            _importPercent = p.Percent;
+            _progressMessage = p.Message;
+            _ = InvokeAsync(StateHasChanged);
+        });
+
+        try
+        {
+            using var ms = new MemoryStream(_bufferedBytes, writable: false);
+            var opts = new ImportOptions(_autoAssignOwners, _applySlaDueDates, _includeInfo, ImportSource.ManualUpload);
+            var summary = await ImportService.ImportAsync(ms, _selectedFileName, _selectedTask, opts, _currentUserId, progress);
+
+            _bufferedBytes = null;
+            _preview = null;
+            _selectedFileName = null;
+            await ReloadBatchesAsync();
+            _toast?.Show(summary.ToastMessage, ToastKind.Success);
+        }
+        catch (Exception ex)
+        {
+            _validationError = ex.Message;
+            await ReloadBatchesAsync();
+            _toast?.Show($"Import failed: {ex.Message}", ToastKind.Error);
+        }
+        finally
+        {
+            _importing = false;
+        }
+    }
+
+    private void PromptRollback(ImportBatchEntity rec)
+    {
+        _rollbackTarget = rec;
+        _showRollbackModal = true;
+    }
+
+    private async Task ConfirmRollbackAsync()
+    {
+        if (_rollbackTarget is null) return;
+        await ImportService.RollbackImportAsync(_rollbackTarget.Id, _currentUserId, confirmed: true);
+        await ReloadBatchesAsync();
+        _toast?.Show($"Import batch #{_rollbackTarget.Id} rolled back.", ToastKind.Warning);
+        _rollbackTarget = null;
+    }
+
+    private async Task ExportHistoryCsvAsync()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("BatchId,StartedAtUtc,Source,FileName,Target,Total,New,Updated,MarkedForVerification,Closed,Reopened,Status");
+        foreach (var r in _filteredBatches)
+        {
+            sb.AppendLine($"{r.Id},{r.StartedAt:yyyy-MM-dd HH:mm},{r.Source},\"{r.FileName}\",\"{r.TargetName}\",{r.TotalFindings},{r.NewCount},{r.UpdatedCount},{r.MarkedForVerificationCount},{r.ClosedCount},{r.ReopenedCount},{r.Status}");
+        }
+        await using var mod = await JS.InvokeAsync<IJSObjectReference>("import", "./js/console.js");
+        await mod.InvokeVoidAsync("downloadTextFile", "vulntrack-import-history.csv", sb.ToString(), "text/csv;charset=utf-8");
+        _toast?.Show("Import history exported to CSV.", ToastKind.Info);
+    }
+
+    private static string ImportStatusClass(ImportStatus status) => status switch
+    {
+        ImportStatus.Completed => "vc-status--closed",
+        ImportStatus.CompletedWithWarnings => "vc-status--progress",
+        ImportStatus.Failed => "vc-status--open",
+        _ => "vc-status--accepted"
+    };
+
+    private static string FormatBytes(long bytes)
+    {
+        if (bytes < 1024) return $"{bytes} B";
+        if (bytes < 1024 * 1024) return $"{bytes / 1024.0:0.0} KB";
+        return $"{bytes / (1024.0 * 1024.0):0.00} MB";
+    }
+}

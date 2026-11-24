@@ -1,0 +1,39 @@
+<div class="vc-filterbar">
+    <div class="vc-filterbar__left">
+        @if (ShowSearch)
+        {
+            <div class="vc-filterbar__search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search"
+                       placeholder="@Placeholder"
+                       aria-label="@Placeholder"
+                       value="@SearchText"
+                       @oninput="OnSearchInput" />
+            </div>
+        }
+        <div class="vc-filterbar__chips">
+            @ChildContent
+        </div>
+    </div>
+
+    @if (Actions is not null)
+    {
+        <div class="vc-filterbar__actions">
+            @Actions
+        </div>
+    }
+</div>
+
+@code {
+    [Parameter] public bool ShowSearch { get; set; }
+    [Parameter] public string? SearchText { get; set; }
+    [Parameter] public EventCallback<string?> SearchTextChanged { get; set; }
+    [Parameter] public string Placeholder { get; set; } = "Filter";
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public RenderFragment? Actions { get; set; }
+
+    private Task OnSearchInput(ChangeEventArgs e)
+    {
+        return SearchTextChanged.InvokeAsync(e.Value?.ToString());
+    }
+}

@@ -1,0 +1,203 @@
+@page "/remediation"
+@rendermode InteractiveServer
+@attribute [Authorize]
+
+<PageTitle>Remediation | VulnTrack</PageTitle>
+
+<PageHeader Title="Remediation"
+            Subtitle="Track patching workflow across stages · drag cards to update status" />
+
+<div class="vc-page">
+    <div class="vc-card" style="margin-bottom:16px">
+        <div class="vc-filters-row" style="margin-bottom:0">
+            @if (!_isOwner)
+            {
+                <select class="vc-select" aria-label="Filter by owner" @bind="_ownerFilter">
+                    <option value="">All owners</option>
+                    @foreach (var owner in _owners)
+                    {
+                        <option value="@owner">@owner</option>
+                    }
+                </select>
+            }
+
+            <select class="vc-select" aria-label="Filter by severity" @bind="_severityFilter">
+                <option value="">All severities</option>
+                @foreach (var s in Enum.GetValues<Severity>())
+                {
+                    <option value="@s">@s</option>
+                }
+            </select>
+
+            <select class="vc-select" aria-label="Filter by asset" @bind="_assetFilter">
+                <option value="">All assets</option>
+                @foreach (var asset in _assets)
+                {
+                    <option value="@asset">@asset</option>
+                }
+            </select>
+
+            <span class="vc-cell-sub" style="margin-left:auto">
+                <i class="bi bi-shield-lock" aria-hidden="true"></i>
+                Cards move to Closed only after Greenbone rescan verification.
+            </span>
+        </div>
+    </div>
+
+    <div class="vc-kanban">
+        @foreach (var col in _columns)
+        {
+            var cards = CardsFor(col.Status);
+            <section class="vc-kcol @(_dragOverStatus == col.Status ? "is-over" : "")"
+                     aria-label="@col.Title column"
+                     @ondragover="() => _dragOverStatus = col.Status"
+                     @ondragover:preventDefault="true"
+                     @ondragleave="() => { if (_dragOverStatus == col.Status) _dragOverStatus = null; }"
+                     @ondrop="() => DropOn(col.Status)">
+                <div class="vc-kcol__head">
+                    <h2>@col.Title</h2>
+                    <span class="vc-count-pill">@cards.Count</span>
+                </div>
+
+                <div class="vc-kcol__body">
+                    @if (cards.Count == 0)
+                    {
+                        <div class="vc-kcol__empty">No findings in this stage</div>
+                    }
+                    else
+                    {
+                        @foreach (var card in cards)
+                        {
+                            var overdue = card.IsOverdueOn(DummyData.Today);
+                            var key = string.Equals(card.Cve, "N/A", StringComparison.OrdinalIgnoreCase) ? card.Id : card.Cve;
+                            <article class="vc-kcard @(overdue ? "vc-kcard--overdue" : "")"
+                                     draggable="true"
+                                     @ondragstart="() => StartDrag(card)"
+                                     @ondragend="EndDrag">
+                                <div class="vc-kcard__top">
+                                    <a class="vc-link vc-mono" href="/vulnerabilities/@key">@card.Cve</a>
+                                    <SeverityBadge Severity="card.Severity" />
+                                </div>
+                                <p class="vc-kcard__title">@card.Title</p>
+                                <div class="vc-kcard__asset vc-mono">@card.AssetName</div>
+                                <div class="vc-kcard__foot">
+                                    <div class="vc-kcard__owner">
+                                        <span class="vc-avatar vc-avatar--xs" aria-hidden="true">@Initials(card.Owner)</span>
+                                        <span>@card.Owner</span>
+                                    </div>
+                                    <span class="@(overdue ? "vc-due--over" : "vc-cell-sub")">
+                                        @card.DueDate.ToString("d MMM")
+                                    </span>
+                                </div>
+                            </article>
+                        }
+                    }
+                </div>
+            </section>
+        }
+    </div>
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    private sealed record KanbanCol(string Title, FindingStatus Status);
+
+    private static readonly KanbanCol[] _columns =
+    {
+        new("Open", FindingStatus.Open),
+        new("In Progress", FindingStatus.InProgress),
+        new("Fixed (awaiting verification)", FindingStatus.FixedAwaitingVerification),
+        new("Closed", FindingStatus.Closed)
+    };
+
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _isOwner;
+    private string _userName = "";
+    private string _ownerFilter = "";
+    private string _severityFilter = "";
+    private string _assetFilter = "";
+
+    private List<string> _owners = new();
+    private List<string> _assets = new();
+    private List<Vulnerability> _scope = new();
+
+    private Vulnerability? _dragging;
+    private FindingStatus? _dragOverStatus;
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState;
+        _isOwner = auth.User.IsInRole(Roles.AssetOwner);
+        _userName = auth.User.Identity?.Name ?? "";
+
+        _scope = _isOwner
+            ? DummyData.Vulnerabilities.Where(v => string.Equals(v.Owner, _userName, StringComparison.OrdinalIgnoreCase)).ToList()
+            : DummyData.Vulnerabilities;
+
+        _owners = _scope.Select(v => v.Owner).Distinct().OrderBy(x => x).ToList();
+        _assets = _scope.Select(v => v.AssetName).Distinct().OrderBy(x => x).ToList();
+    }
+
+    private List<Vulnerability> CardsFor(FindingStatus status)
+    {
+        IEnumerable<Vulnerability> q = _scope.Where(v => v.Status == status);
+
+        if (!string.IsNullOrWhiteSpace(_ownerFilter))
+            q = q.Where(v => v.Owner == _ownerFilter);
+
+        if (Enum.TryParse<Severity>(_severityFilter, out var sev))
+            q = q.Where(v => v.Severity == sev);
+
+        if (!string.IsNullOrWhiteSpace(_assetFilter))
+            q = q.Where(v => v.AssetName == _assetFilter);
+
+        return q.OrderBy(v => v.Severity).ThenBy(v => v.DueDate).Take(12).ToList();
+    }
+
+    private void StartDrag(Vulnerability card)
+    {
+        _dragging = card;
+    }
+
+    private void EndDrag()
+    {
+        _dragging = null;
+        _dragOverStatus = null;
+    }
+
+    private void DropOn(FindingStatus target)
+    {
+        var card = _dragging;
+        _dragging = null;
+        _dragOverStatus = null;
+
+        if (card is null || card.Status == target) return;
+
+        if (target == FindingStatus.Closed && card.RescanResult != RescanResult.ConfirmedFixed)
+        {
+            _toast?.Show($"Cannot move {card.Cve} to Closed: a verified Greenbone rescan is required first.", ToastKind.Warning);
+            return;
+        }
+
+        card.Status = target;
+        card.LastUpdated = DummyData.Today;
+        if (target == FindingStatus.FixedAwaitingVerification)
+        {
+            card.FixedBy = _userName;
+            card.FixedOn = DummyData.Today;
+        }
+        card.Activity.Add(new FindingActivity(new DateTime(2026, 11, 23, 14, 30, 0), _userName, "Status changed", $"Moved card to {target.ToLabel()}."));
+        _toast?.Show($"Moved {card.Cve} to {target.ToLabel()}.", ToastKind.Success);
+    }
+
+    private static string Initials(string name)
+    {
+        var parts = name.Split(' ', StringSplitOptions.RemoveEmptyEntries);
+        if (parts.Length == 0) return "?";
+        if (parts.Length == 1) return parts[0][..1].ToUpperInvariant();
+        return $"{parts[0][0]}{parts[^1][0]}".ToUpperInvariant();
+    }
+}

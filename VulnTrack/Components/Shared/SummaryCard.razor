@@ -1,0 +1,89 @@
+@{
+    var toneColor = Tone switch
+    {
+        "critical" => "#C0392B",
+        "warning" => "#E67E22",
+        "success" => "#1E8E5A",
+        _ => "#14968C"
+    };
+
+    var isDown = Trend is { Count: >= 2 }
+        ? Trend[^1] < Trend[0]
+        : DeltaGood == true;
+
+    var arrowIcon = isDown ? "bi-arrow-down-right" : "bi-arrow-up-right";
+    var deltaClass = DeltaGood switch
+    {
+        true => "vc-scard__delta--good",
+        false => "vc-scard__delta--bad",
+        _ => ""
+    };
+}
+
+@if (!string.IsNullOrWhiteSpace(Href))
+{
+    <a href="@Href" class="vc-card vc-scard vc-scard--link">
+        <div class="vc-scard__top">
+            <span class="vc-scard__icon vc-scard__icon--@Tone" aria-hidden="true">
+                <i class="bi @Icon"></i>
+            </span>
+            <span class="vc-scard__title">@Title</span>
+        </div>
+
+        <div class="vc-scard__body">
+            <div>
+                <div class="vc-scard__val">@Value</div>
+                @if (!string.IsNullOrWhiteSpace(Delta))
+                {
+                    <div class="vc-scard__delta @deltaClass">
+                        <i class="bi @arrowIcon" aria-hidden="true"></i>
+                        <span>@Delta</span>
+                    </div>
+                }
+            </div>
+            @if (Trend is { Count: >= 2 })
+            {
+                <Sparkline Values="Trend" Color="@toneColor" />
+            }
+        </div>
+    </a>
+}
+else
+{
+    <div class="vc-card vc-scard">
+        <div class="vc-scard__top">
+            <span class="vc-scard__icon vc-scard__icon--@Tone" aria-hidden="true">
+                <i class="bi @Icon"></i>
+            </span>
+            <span class="vc-scard__title">@Title</span>
+        </div>
+
+        <div class="vc-scard__body">
+            <div>
+                <div class="vc-scard__val">@Value</div>
+                @if (!string.IsNullOrWhiteSpace(Delta))
+                {
+                    <div class="vc-scard__delta @deltaClass">
+                        <i class="bi @arrowIcon" aria-hidden="true"></i>
+                        <span>@Delta</span>
+                    </div>
+                }
+            </div>
+            @if (Trend is { Count: >= 2 })
+            {
+                <Sparkline Values="Trend" Color="@toneColor" />
+            }
+        </div>
+    </div>
+}
+
+@code {
+    [Parameter, EditorRequired] public string Title { get; set; } = "";
+    [Parameter, EditorRequired] public string Value { get; set; } = "0";
+    [Parameter] public string Icon { get; set; } = "bi-shield";
+    [Parameter] public string Tone { get; set; } = "neutral";
+    [Parameter] public string? Delta { get; set; }
+    [Parameter] public bool? DeltaGood { get; set; }
+    [Parameter] public IReadOnlyList<double>? Trend { get; set; }
+    [Parameter] public string? Href { get; set; }
+}

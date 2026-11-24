@@ -1,0 +1,190 @@
+@page "/verification"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Administrator,Security Analyst")]
+@inject VulnTrackDataService DataService
+@using System.Security.Claims
+
+<PageTitle>Verification | VulnTrack</PageTitle>
+
+<PageHeader Title="Verification"
+            Subtitle="Confirm fixes via Greenbone rescan before closing any finding" />
+
+<div class="vc-page">
+    <section class="vc-card vc-schedule-banner" aria-label="Nightly rescan schedule">
+        <div class="vc-schedule-banner__left">
+            <span class="vc-scard__icon vc-scard__icon--neutral" aria-hidden="true">
+                <i class="bi bi-clock-history"></i>
+            </span>
+            <div>
+                <h2 style="font-size:15px">Nightly rescan scheduled 02:00</h2>
+                <p class="vc-cell-sub">Targeted Greenbone rescans automatically check every asset with findings marked Fixed, awaiting verification.</p>
+            </div>
+        </div>
+        <span class="vc-pill vc-pill--ok">
+            <span class="vc-dot vc-dot--ok" aria-hidden="true"></span>
+            @_queue.Count awaiting review
+        </span>
+    </section>
+
+    <section class="vc-card" style="margin-top:20px">
+        <div class="vc-card__head">
+            <h2>Verification queue</h2>
+            <span class="vc-cell-sub">Close finding is enabled only when rescan confirms the fix.</span>
+        </div>
+
+        <DataTable TItem="VulnerabilityEntity"
+                   Items="_queue"
+                   Loading="_loading"
+                   PageSize="10"
+                   Caption="Verification queue"
+                   EmptyIcon="bi-patch-check"
+                   EmptyTitle="Verification queue is clear"
+                   EmptyMessage="No findings are waiting for rescan verification.">
+            <Columns>
+                <DataColumn TItem="VulnerabilityEntity" Title="CVE" SortBy="v => v.CveId">
+                    <Template Context="v">
+                        <a class="vc-link vc-mono" href="/vulnerabilities/@v.Id">@v.CveId</a>
+                        <div class="vc-cell-sub">@v.Title</div>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Asset" SortBy="v => v.Asset.Hostname">
+                    <Template Context="v">
+                        <span class="vc-mono">@v.Asset.Hostname</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Fixed by" SortBy="v => v.Owner?.FullName ?? string.Empty">
+                    <Template Context="v">@(v.Owner?.FullName ?? "Unassigned")</Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Fixed on" SortBy="v => v.FixedAt">
+                    <Template Context="v">@((v.FixedAt ?? v.LastSeenAt).ToString("d MMM yyyy"))</Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Last rescan" SortBy="v => v.LastImportBatch?.CompletedAt">
+                    <Template Context="v">
+                        @(v.LastImportBatch?.CompletedAt?.ToString("d MMM, HH:mm") ?? "Not run yet")
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Rescan result">
+                    <Template Context="v">
+                        @{
+                            var confirmed = _confirmedIds.Contains(v.Id) || v.VerifiedByImportBatchId.HasValue;
+                        }
+                        <span class="vc-status @(confirmed ? "vc-status--closed" : "vc-status--fixed")">
+                            @(confirmed ? "Confirmed fixed" : "Pending")
+                        </span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Actions">
+                    <Template Context="v">
+                        @{
+                            var confirmed = _confirmedIds.Contains(v.Id) || v.VerifiedByImportBatchId.HasValue;
+                        }
+                        <div class="vc-action-row">
+                            <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => RequestRescanAsync(v)">Request rescan</button>
+                            <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => _reviewItem = v">Review result</button>
+                            <button type="button"
+                                    class="vc-btn vc-btn--primary vc-btn--sm"
+                                    disabled="@(!confirmed)"
+                                    title="@(confirmed ? "Close verified finding" : "Enabled only after rescan confirms fix")"
+                                    @onclick="() => PromptClose(v)">
+                                Close finding
+                            </button>
+                        </div>
+                    </Template>
+                </DataColumn>
+            </Columns>
+        </DataTable>
+    </section>
+
+    <ConfirmModal @bind-Visible="_showCloseModal"
+                  Title="Close verified finding"
+                  Message="@($"Close {_closeTarget?.CveId} on {_closeTarget?.Asset.Hostname}? Greenbone rescan confirmed the vulnerability is no longer detected.")"
+                  ConfirmText="Close finding"
+                  Danger="false"
+                  OnConfirm="ConfirmCloseAsync" />
+
+    @if (_reviewItem is not null)
+    {
+        <div class="vc-modal-backdrop" @onclick="() => _reviewItem = null">
+            <div class="vc-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+                <div class="vc-modal__head">
+                    <h2 class="vc-modal__title">Rescan result · @_reviewItem.CveId</h2>
+                    <button type="button" class="vc-icon-btn" aria-label="Close" @onclick="() => _reviewItem = null">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="vc-modal__body">
+                    <dl class="vc-kv-list">
+                        <div><dt>Asset</dt><dd class="vc-mono">@_reviewItem.Asset.Hostname (@_reviewItem.Asset.IpAddress)</dd></div>
+                        <div><dt>Port</dt><dd class="vc-mono">@_reviewItem.Port/@_reviewItem.Protocol</dd></div>
+                        <div><dt>Owner</dt><dd>@(_reviewItem.Owner?.FullName ?? "Unassigned")</dd></div>
+                        <div><dt>Last batch</dt><dd>@(_reviewItem.LastImportBatch?.FileName ?? "Scheduled 02:00")</dd></div>
+                        <div><dt>Status</dt><dd>@(_confirmedIds.Contains(_reviewItem.Id) ? "Confirmed fixed" : "Pending rescan")</dd></div>
+                    </dl>
+                </div>
+                <div class="vc-modal__foot">
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick="() => _reviewItem = null">Done</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loading = true;
+    private string _currentUserId = "";
+    private List<VulnerabilityEntity> _queue = new();
+    private readonly HashSet<int> _confirmedIds = new();
+    private bool _showCloseModal;
+    private VulnerabilityEntity? _closeTarget;
+    private VulnerabilityEntity? _reviewItem;
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState;
+        _currentUserId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "";
+        await ReloadQueueAsync();
+        _loading = false;
+    }
+
+    private async Task ReloadQueueAsync()
+    {
+        var all = await DataService.GetVulnerabilitiesAsync(_currentUserId, isAssetOwner: false);
+        _queue = all.Where(v => v.Status == VulnerabilityStatus.FixedAwaitingVerification)
+            .OrderByDescending(v => v.FixedAt)
+            .ToList();
+    }
+
+    private async Task RequestRescanAsync(VulnerabilityEntity v)
+    {
+        await DataService.RequestRescanAsync(v.Id, _currentUserId);
+        _confirmedIds.Add(v.Id);
+        _toast?.Show($"Targeted rescan completed for {v.CveId} on {v.Asset.Hostname}: Confirmed fixed.", ToastKind.Success);
+    }
+
+    private void PromptClose(VulnerabilityEntity v)
+    {
+        _closeTarget = v;
+        _showCloseModal = true;
+    }
+
+    private async Task ConfirmCloseAsync()
+    {
+        if (_closeTarget is null) return;
+        await DataService.VerifyAndCloseAsync(_closeTarget.Id, _currentUserId);
+        _confirmedIds.Remove(_closeTarget.Id);
+        _toast?.Show($"{_closeTarget.CveId} closed with verified rescan evidence.", ToastKind.Success);
+        _closeTarget = null;
+        await ReloadQueueAsync();
+    }
+}

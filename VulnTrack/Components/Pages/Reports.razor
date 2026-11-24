@@ -1,0 +1,211 @@
+@page "/reports"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject IJSRuntime JS
+@using System.Text
+
+<PageTitle>Reports | VulnTrack</PageTitle>
+
+<PageHeader Title="Reports"
+            Subtitle="Build executive, operational, verification, and compliance exports" />
+
+<div class="vc-page">
+    <section class="vc-card">
+        <div class="vc-card__head">
+            <h2>Report builder</h2>
+        </div>
+
+        <div class="vc-form-3col">
+            <div class="vc-field">
+                <label for="rpt-type">Report type</label>
+                <select id="rpt-type" class="vc-input" @bind="_reportType">
+                    <option value="Executive summary">Executive summary</option>
+                    <option value="Open findings">Open findings</option>
+                    <option value="Overdue remediation">Overdue remediation</option>
+                    <option value="Closure verification">Closure verification</option>
+                    <option value="Audit">Audit</option>
+                </select>
+            </div>
+
+            <div class="vc-field">
+                <label for="rpt-from">Date from</label>
+                <input id="rpt-from" type="date" class="vc-input" @bind="_dateFrom" />
+            </div>
+
+            <div class="vc-field">
+                <label for="rpt-to">Date to</label>
+                <input id="rpt-to" type="date" class="vc-input" @bind="_dateTo" />
+            </div>
+
+            <div class="vc-field">
+                <label for="rpt-sev">Severity</label>
+                <select id="rpt-sev" class="vc-input" @bind="_severity">
+                    <option value="All">All severities</option>
+                    @foreach (var s in Enum.GetValues<Severity>())
+                    {
+                        <option value="@s">@s</option>
+                    }
+                </select>
+            </div>
+
+            <div class="vc-field">
+                <label for="rpt-status">Status</label>
+                <select id="rpt-status" class="vc-input" @bind="_status">
+                    <option value="All">All statuses</option>
+                    @foreach (var st in Enum.GetValues<FindingStatus>())
+                    {
+                        <option value="@st.ToLabel()">@st.ToLabel()</option>
+                    }
+                </select>
+            </div>
+
+            <div class="vc-field">
+                <label for="rpt-scope">Asset or department</label>
+                <select id="rpt-scope" class="vc-input" @bind="_scopeFilter">
+                    <option value="All assets">All assets &amp; departments</option>
+                    @foreach (var dept in _departments)
+                    {
+                        <option value="Department: @dept">Department: @dept</option>
+                    }
+                    @foreach (var asset in DummyData.Assets)
+                    {
+                        <option value="Asset: @asset.Hostname">Asset: @asset.Hostname</option>
+                    }
+                </select>
+            </div>
+        </div>
+
+        <div class="vc-btn-row" style="margin-top:18px">
+            <button type="button" class="vc-btn vc-btn--primary" @onclick='() => GenerateAsync("PDF")'>
+                <i class="bi bi-file-earmark-pdf" aria-hidden="true"></i>
+                <span>Export PDF</span>
+            </button>
+            <button type="button" class="vc-btn vc-btn--secondary" @onclick='() => GenerateAsync("CSV")'>
+                <i class="bi bi-filetype-csv" aria-hidden="true"></i>
+                <span>Export CSV</span>
+            </button>
+        </div>
+    </section>
+
+    <section class="vc-card" style="margin-top:20px">
+        <div class="vc-card__head">
+            <h2>Recent reports</h2>
+        </div>
+
+        <DataTable TItem="ReportRecord"
+                   Items="_reports"
+                   Loading="_loading"
+                   PageSize="5"
+                   Caption="Recent reports"
+                   EmptyIcon="bi-file-earmark-bar-graph"
+                   EmptyTitle="No reports generated yet"
+                   EmptyMessage="Use the report builder above to generate your first PDF or CSV export.">
+            <Columns>
+                <DataColumn TItem="ReportRecord" Title="Name" SortBy="r => r.Name">
+                    <Template Context="r">
+                        <div class="vc-cell-cve">@r.Name</div>
+                        <div class="vc-cell-sub">@r.ScopeSummary</div>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="ReportRecord" Title="Created by" SortBy="r => r.CreatedBy">
+                    <Template Context="r">@r.CreatedBy</Template>
+                </DataColumn>
+
+                <DataColumn TItem="ReportRecord" Title="Date" SortBy="r => r.CreatedAt">
+                    <Template Context="r">@r.CreatedAt.ToString("d MMM yyyy, HH:mm")</Template>
+                </DataColumn>
+
+                <DataColumn TItem="ReportRecord" Title="Format" SortBy="r => r.Format">
+                    <Template Context="r">
+                        <span class="vc-count-pill">@r.Format</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="ReportRecord" Title="Download">
+                    <Template Context="r">
+                        <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => DownloadExistingAsync(r)">
+                            <i class="bi bi-download" aria-hidden="true"></i>
+                            <span>Download</span>
+                        </button>
+                    </Template>
+                </DataColumn>
+            </Columns>
+        </DataTable>
+    </section>
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loading = true;
+    private string _actor = "Andrea Reyes";
+    private string _reportType = "Executive summary";
+    private DateOnly _dateFrom = new(2026, 11, 1);
+    private DateOnly _dateTo = DummyData.Today;
+    private string _severity = "All";
+    private string _status = "All";
+    private string _scopeFilter = "All assets";
+
+    private List<string> _departments = new();
+    private List<ReportRecord> _reports = new();
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState;
+        _actor = auth.User.Identity?.Name ?? "Andrea Reyes";
+        _departments = DummyData.Assets.Select(a => a.Team).Distinct().OrderBy(x => x).ToList();
+        _reports = DummyData.RecentReports.OrderByDescending(r => r.CreatedAt).ToList();
+
+        if (RendererInfo.IsInteractive)
+        {
+            await Task.Delay(180);
+            _loading = false;
+        }
+    }
+
+    private async Task GenerateAsync(string format)
+    {
+        var rec = new ReportRecord
+        {
+            Id = $"RPT-{205 + DummyData.RecentReports.Count}",
+            Name = $"{_reportType} — {_dateFrom:d MMM} to {_dateTo:d MMM yyyy}",
+            ReportType = _reportType,
+            CreatedBy = _actor,
+            CreatedAt = new DateTime(2026, 11, 23, 14, 15, 0),
+            Format = format,
+            ScopeSummary = $"{_scopeFilter} · Severity: {_severity} · Status: {_status}"
+        };
+
+        DummyData.RecentReports.Insert(0, rec);
+        _reports = DummyData.RecentReports.OrderByDescending(r => r.CreatedAt).ToList();
+        await DownloadExistingAsync(rec);
+    }
+
+    private async Task DownloadExistingAsync(ReportRecord rec)
+    {
+        var ext = rec.Format.Equals("CSV", StringComparison.OrdinalIgnoreCase) ? "csv" : "txt";
+        var mime = ext == "csv" ? "text/csv;charset=utf-8" : "text/plain;charset=utf-8";
+        var sb = new StringBuilder();
+        if (ext == "csv")
+        {
+            sb.AppendLine("Report,Type,CreatedBy,CreatedAt,Scope");
+            sb.AppendLine($"\"{rec.Name}\",\"{rec.ReportType}\",\"{rec.CreatedBy}\",{rec.CreatedAt:yyyy-MM-dd HH:mm},\"{rec.ScopeSummary}\"");
+        }
+        else
+        {
+            sb.AppendLine($"VulnTrack Report: {rec.Name}");
+            sb.AppendLine($"Type: {rec.ReportType}");
+            sb.AppendLine($"Scope: {rec.ScopeSummary}");
+            sb.AppendLine($"Generated by: {rec.CreatedBy} on {rec.CreatedAt:yyyy-MM-dd HH:mm}");
+            sb.AppendLine($"Summary: Total Open {DummyData.Snapshot.TotalOpen}, Critical {DummyData.Snapshot.Critical}, Overdue {DummyData.Snapshot.Overdue}, Closed This Month {DummyData.Snapshot.ClosedThisMonth}");
+        }
+
+        await using var mod = await JS.InvokeAsync<IJSObjectReference>("import", "./js/console.js");
+        await mod.InvokeVoidAsync("downloadTextFile", $"{rec.Id.ToLowerInvariant()}.{ext}", sb.ToString(), mime);
+        _toast?.Show($"Downloaded {rec.Name} ({rec.Format}).", ToastKind.Success);
+    }
+}

@@ -1,0 +1,92 @@
+@using System.Globalization
+
+@{
+    var w = 640.0;
+    var h = (double)Height;
+    var padLeft = 32.0;
+    var padRight = 14.0;
+    var padTop = 12.0;
+    var padBottom = 24.0;
+    var plotW = Math.Max(1.0, w - padLeft - padRight);
+    var plotH = Math.Max(1.0, h - padTop - padBottom);
+
+    var rawMax = Series.SelectMany(s => s.Values).DefaultIfEmpty(0).Max();
+    var yMax = Math.Max(10.0, Math.Ceiling(rawMax / 10.0) * 10.0);
+    var n = Labels.Count;
+    var aria = string.Join("; ", Series.Select(s => $"{s.Name} latest {(s.Values.Count > 0 ? s.Values[^1] : 0):0}"));
+}
+
+<svg class="vc-linechart"
+     viewBox="0 0 640 @Height"
+     style="width:100%;height:auto;"
+     role="img"
+     aria-label="@($"Trend chart: {aria}")">
+
+    @for (var g = 0; g <= 4; g++)
+    {
+        var frac = g / 4.0;
+        var y = padTop + (1.0 - frac) * plotH;
+        var tickVal = yMax * frac;
+        var yStr = y.ToString("0.##", CultureInfo.InvariantCulture);
+
+        <line x1="@padLeft.ToString("0.##", CultureInfo.InvariantCulture)"
+              y1="@yStr"
+              x2="@((w - padRight).ToString("0.##", CultureInfo.InvariantCulture))"
+              y2="@yStr"
+              stroke="#E3E8EF"
+              stroke-width="1"
+              stroke-dasharray="@(g == 0 ? "" : "3 3")" />
+
+        @((MarkupString)$"<text x=\"{(padLeft - 6).ToString("0.##", CultureInfo.InvariantCulture)}\" y=\"{(y + 3.5).ToString("0.##", CultureInfo.InvariantCulture)}\" text-anchor=\"end\" class=\"vc-chart-axis\">{tickVal:0}</text>")
+    }
+
+    @for (var i = 0; i < n; i++)
+    {
+        if (i % 2 != 0 && i != n - 1) continue;
+        var x = n <= 1 ? padLeft : padLeft + (i / (double)(n - 1)) * plotW;
+        @((MarkupString)$"<text x=\"{x.ToString("0.##", CultureInfo.InvariantCulture)}\" y=\"{(h - 6).ToString("0.##", CultureInfo.InvariantCulture)}\" text-anchor=\"middle\" class=\"vc-chart-axis\">{System.Net.WebUtility.HtmlEncode(Labels[i])}</text>")
+    }
+
+    @foreach (var s in Series)
+    {
+        if (s.Values.Count == 0) continue;
+        var pts = new List<string>(s.Values.Count);
+        var count = Math.Min(n > 0 ? n : s.Values.Count, s.Values.Count);
+
+        for (var i = 0; i < count; i++)
+        {
+            var x = count <= 1 ? padLeft : padLeft + (i / (double)(count - 1)) * plotW;
+            var y = padTop + (1.0 - Math.Clamp(s.Values[i] / yMax, 0.0, 1.0)) * plotH;
+            pts.Add($"{x.ToString("0.##", CultureInfo.InvariantCulture)},{y.ToString("0.##", CultureInfo.InvariantCulture)}");
+        }
+
+        <polyline fill="none"
+                  stroke="@s.Color"
+                  stroke-width="2"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  points="@string.Join(" ", pts)" />
+
+        @for (var i = 0; i < count; i++)
+        {
+            var x = count <= 1 ? padLeft : padLeft + (i / (double)(count - 1)) * plotW;
+            var y = padTop + (1.0 - Math.Clamp(s.Values[i] / yMax, 0.0, 1.0)) * plotH;
+            var label = i < Labels.Count ? Labels[i] : $"{i + 1}";
+
+            <circle cx="@x.ToString("0.##", CultureInfo.InvariantCulture)"
+                    cy="@y.ToString("0.##", CultureInfo.InvariantCulture)"
+                    r="3"
+                    fill="#ffffff"
+                    stroke="@s.Color"
+                    stroke-width="2">
+                <title>@($"{s.Name} ({label}): {s.Values[i]:0}")</title>
+            </circle>
+        }
+    }
+</svg>
+
+@code {
+    [Parameter] public IReadOnlyList<string> Labels { get; set; } = Array.Empty<string>();
+    [Parameter] public IReadOnlyList<ChartSeries> Series { get; set; } = Array.Empty<ChartSeries>();
+    [Parameter] public int Height { get; set; } = 220;
+}

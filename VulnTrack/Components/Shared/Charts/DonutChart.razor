@@ -1,0 +1,77 @@
+@using System.Globalization
+
+@{
+    var total = Segments.Sum(s => Math.Max(0, s.Value));
+    var cx = Size / 2.0;
+    var cy = Size / 2.0;
+    var r = (Size - Thickness) / 2.0;
+    var circ = 2.0 * Math.PI * r;
+    var nonZero = Segments.Count(s => s.Value > 0);
+    var gap = nonZero > 1 ? 1.5 : 0.0;
+    var summary = string.Join(", ", Segments.Select(s => $"{s.Label} {s.Value:0}"));
+    var offset = 0.0;
+}
+
+<svg class="vc-donut"
+     viewBox="0 0 @Size @Size"
+     width="@Size"
+     height="@Size"
+     role="img"
+     aria-label="@($"{CenterValue} {CenterLabel}: {summary}")">
+    <g transform="rotate(-90 @cx.ToString("0.##", CultureInfo.InvariantCulture) @cy.ToString("0.##", CultureInfo.InvariantCulture))">
+        @if (total <= 0)
+        {
+            <circle cx="@cx.ToString("0.##", CultureInfo.InvariantCulture)"
+                    cy="@cy.ToString("0.##", CultureInfo.InvariantCulture)"
+                    r="@r.ToString("0.##", CultureInfo.InvariantCulture)"
+                    fill="none"
+                    stroke="#E3E8EF"
+                    stroke-width="@Thickness" />
+        }
+        else
+        {
+            @foreach (var seg in Segments)
+            {
+                if (seg.Value <= 0) continue;
+                var segLen = (seg.Value / total) * circ;
+                var drawLen = Math.Max(0.5, segLen - gap);
+                var dashArray = $"{drawLen.ToString("0.##", CultureInfo.InvariantCulture)} {(circ - drawLen).ToString("0.##", CultureInfo.InvariantCulture)}";
+                var dashOffset = (-offset).ToString("0.##", CultureInfo.InvariantCulture);
+
+                <circle cx="@cx.ToString("0.##", CultureInfo.InvariantCulture)"
+                        cy="@cy.ToString("0.##", CultureInfo.InvariantCulture)"
+                        r="@r.ToString("0.##", CultureInfo.InvariantCulture)"
+                        fill="none"
+                        stroke="@seg.Color"
+                        stroke-width="@Thickness"
+                        stroke-dasharray="@dashArray"
+                        stroke-dashoffset="@dashOffset">
+                    <title>@($"{seg.Label}: {seg.Value:0}")</title>
+                </circle>
+
+                offset += segLen;
+            }
+        }
+    </g>
+
+    <text x="@cx.ToString("0.##", CultureInfo.InvariantCulture)"
+          y="@((cy - 2).ToString("0.##", CultureInfo.InvariantCulture))"
+          text-anchor="middle"
+          class="vc-donut__val">
+        @CenterValue
+    </text>
+    <text x="@cx.ToString("0.##", CultureInfo.InvariantCulture)"
+          y="@((cy + 16).ToString("0.##", CultureInfo.InvariantCulture))"
+          text-anchor="middle"
+          class="vc-donut__lbl">
+        @CenterLabel
+    </text>
+</svg>
+
+@code {
+    [Parameter] public IReadOnlyList<ChartSegment> Segments { get; set; } = Array.Empty<ChartSegment>();
+    [Parameter] public string CenterValue { get; set; } = "0";
+    [Parameter] public string CenterLabel { get; set; } = "open";
+    [Parameter] public int Size { get; set; } = 168;
+    [Parameter] public int Thickness { get; set; } = 18;
+}

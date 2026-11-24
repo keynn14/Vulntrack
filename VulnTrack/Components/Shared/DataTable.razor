@@ -1,0 +1,257 @@
+@typeparam TItem
+
+<CascadingValue Value="this" IsFixed="true">
+    @Columns
+</CascadingValue>
+
+@{
+    var rawList = (Items ?? Enumerable.Empty<TItem>()).ToList();
+    var sorted = ApplySort(rawList);
+    var total = sorted.Count;
+    var effectivePageSize = Math.Max(1, PageSize);
+    var totalPages = Math.Max(1, (int)Math.Ceiling(total / (double)effectivePageSize));
+    var currentPage = Math.Clamp(_page, 0, totalPages - 1);
+    var startIndex = currentPage * effectivePageSize;
+    var paged = sorted.Skip(startIndex).Take(effectivePageSize).ToList();
+    var colSpan = Math.Max(1, _columns.Count);
+}
+
+<div class="vc-table-wrap">
+    <table class="vc-table" aria-busy="@(Loading ? "true" : null)">
+        @if (!string.IsNullOrWhiteSpace(Caption))
+        {
+            <caption class="vc-visually-hidden">@Caption</caption>
+        }
+
+        <thead>
+            <tr>
+                @foreach (var col in _columns)
+                {
+                    <th scope="col" class="@col.CssClass" aria-sort="@GetAriaSort(col)">
+                        @if (col.SortBy is not null)
+                        {
+                            <button type="button" class="vc-th-sort" @onclick="() => ToggleSort(col)">
+                                <span>@col.Title</span>
+                                <i class="bi @GetSortIcon(col)" aria-hidden="true"></i>
+                            </button>
+                        }
+                        else
+                        {
+                            @col.Title
+                        }
+                    </th>
+                }
+            </tr>
+        </thead>
+
+        <tbody>
+            @if (Loading)
+            {
+                var skelRows = Math.Min(effectivePageSize, 5);
+                for (var r = 0; r < skelRows; r++)
+                {
+                    <tr>
+                        @for (var c = 0; c < colSpan; c++)
+                        {
+                            <td><span class="vc-skel"></span></td>
+                        }
+                    </tr>
+                }
+            }
+            else if (paged.Count == 0)
+            {
+                <tr>
+                    <td colspan="@colSpan" class="vc-table__empty-cell">
+                        <EmptyState Icon="@EmptyIcon" Title="@EmptyTitle" Message="@EmptyMessage">
+                            @EmptyAction
+                        </EmptyState>
+                    </td>
+                </tr>
+            }
+            else
+            {
+                foreach (var item in paged)
+                {
+                    var current = item;
+                    <tr class="@(OnRowClick.HasDelegate ? "vc-row-click" : null)"
+                        @onclick="() => HandleRowClick(current)">
+                        @foreach (var col in _columns)
+                        {
+                            <td class="@col.CssClass">@col.Template(current)</td>
+                        }
+                    </tr>
+                }
+            }
+        </tbody>
+    </table>
+</div>
+
+@if (!Loading)
+{
+    <div class="vc-pager">
+        @if (total == 0)
+        {
+            <span class="vc-pager__info">0 results</span>
+        }
+        else
+        {
+            var end = Math.Min(total, startIndex + paged.Count);
+            <span class="vc-pager__info">Showing @(startIndex + 1)–@end of @total</span>
+
+            <div class="vc-pager__controls">
+                <button type="button"
+                        class="vc-pager__btn"
+                        aria-label="Previous page"
+                        disabled="@(currentPage == 0)"
+                        @onclick="() => GoToPage(currentPage - 1)">
+                    <i class="bi bi-chevron-left" aria-hidden="true"></i>
+                </button>
+
+                @{
+                    var windowStart = Math.Max(0, Math.Min(currentPage - 2, totalPages - 5));
+                    var windowEnd = Math.Min(totalPages - 1, windowStart + 4);
+                }
+                @for (var p = windowStart; p <= windowEnd; p++)
+                {
+                    var pageNum = p;
+                    <button type="button"
+                            class="vc-pager__btn @(pageNum == currentPage ? "is-active" : "")"
+                            aria-current="@(pageNum == currentPage ? "page" : null)"
+                            @onclick="() => GoToPage(pageNum)">
+                        @(pageNum + 1)
+                    </button>
+                }
+
+                <button type="button"
+                        class="vc-pager__btn"
+                        aria-label="Next page"
+                        disabled="@(currentPage >= totalPages - 1)"
+                        @onclick="() => GoToPage(currentPage + 1)">
+                    <i class="bi bi-chevron-right" aria-hidden="true"></i>
+                </button>
+            </div>
+        }
+    </div>
+}
+
+@code {
+    private enum SortDirection
+    {
+        None,
+        Asc,
+        Desc
+    }
+
+    private readonly List<DataColumn<TItem>> _columns = new();
+    private IEnumerable<TItem>? _lastItems;
+    private DataColumn<TItem>? _sortColumn;
+    private SortDirection _sortDir = SortDirection.None;
+    private int _page;
+
+    [Parameter, EditorRequired] public RenderFragment Columns { get; set; } = default!;
+    [Parameter] public IEnumerable<TItem>? Items { get; set; }
+    [Parameter] public bool Loading { get; set; }
+    [Parameter] public int PageSize { get; set; } = 10;
+    [Parameter] public string EmptyTitle { get; set; } = "Nothing to show";
+    [Parameter] public string? EmptyMessage { get; set; }
+    [Parameter] public string EmptyIcon { get; set; } = "bi-inbox";
+    [Parameter] public RenderFragment? EmptyAction { get; set; }
+    [Parameter] public string? Caption { get; set; }
+    [Parameter] public EventCallback<TItem> OnRowClick { get; set; }
+
+    private Task HandleRowClick(TItem item)
+    {
+        return OnRowClick.HasDelegate ? OnRowClick.InvokeAsync(item) : Task.CompletedTask;
+    }
+
+    internal void AddColumn(DataColumn<TItem> column)
+    {
+        if (!_columns.Contains(column))
+        {
+            _columns.Add(column);
+            StateHasChanged();
+        }
+    }
+
+    internal void RemoveColumn(DataColumn<TItem> column)
+    {
+        _columns.Remove(column);
+    }
+
+    protected override void OnParametersSet()
+    {
+        if (!ReferenceEquals(Items, _lastItems))
+        {
+            _lastItems = Items;
+            _page = 0;
+        }
+    }
+
+    private void ToggleSort(DataColumn<TItem> col)
+    {
+        if (_sortColumn != col)
+        {
+            _sortColumn = col;
+            _sortDir = SortDirection.Asc;
+        }
+        else if (_sortDir == SortDirection.Asc)
+        {
+            _sortDir = SortDirection.Desc;
+        }
+        else
+        {
+            _sortColumn = null;
+            _sortDir = SortDirection.None;
+        }
+        _page = 0;
+    }
+
+    private void GoToPage(int page)
+    {
+        _page = Math.Max(0, page);
+    }
+
+    private string? GetAriaSort(DataColumn<TItem> col)
+    {
+        if (col.SortBy is null) return null;
+        if (_sortColumn != col || _sortDir == SortDirection.None) return "none";
+        return _sortDir == SortDirection.Asc ? "ascending" : "descending";
+    }
+
+    private string GetSortIcon(DataColumn<TItem> col)
+    {
+        if (_sortColumn != col || _sortDir == SortDirection.None) return "bi-chevron-expand";
+        return _sortDir == SortDirection.Asc ? "bi-sort-up" : "bi-sort-down";
+    }
+
+    private List<TItem> ApplySort(List<TItem> source)
+    {
+        if (_sortColumn?.SortBy is null || _sortDir == SortDirection.None)
+        {
+            return source;
+        }
+
+        var keySelector = _sortColumn.SortBy;
+        var list = new List<TItem>(source);
+        list.Sort((a, b) =>
+        {
+            var cmp = CompareObjects(keySelector(a), keySelector(b));
+            return _sortDir == SortDirection.Desc ? -cmp : cmp;
+        });
+        return list;
+    }
+
+    private static int CompareObjects(object? a, object? b)
+    {
+        if (ReferenceEquals(a, b)) return 0;
+        if (a is null) return -1;
+        if (b is null) return 1;
+
+        if (a.GetType() == b.GetType() && a is IComparable comp)
+        {
+            return comp.CompareTo(b);
+        }
+
+        return string.Compare(a.ToString(), b.ToString(), StringComparison.OrdinalIgnoreCase);
+    }
+}

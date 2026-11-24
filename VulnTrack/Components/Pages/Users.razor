@@ -1,0 +1,302 @@
+@page "/users"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Administrator")]
+
+<PageTitle>Users | VulnTrack</PageTitle>
+
+<PageHeader Title="Users"
+            Subtitle="Manage console accounts, role assignments, and access state"
+            PrimaryText="Add user"
+            PrimaryIcon="bi-person-plus"
+            OnPrimary="OpenAddModal" />
+
+<div class="vc-page">
+    <div class="vc-dash__grid">
+        <section class="vc-card">
+            <div class="vc-card__head">
+                <h2>User directory</h2>
+                <span class="vc-count-pill">@DummyData.Users.Count users</span>
+            </div>
+
+            <FilterBar ShowSearch="true"
+                       SearchText="@_search"
+                       SearchTextChanged="OnSearchChanged"
+                       Placeholder="Search name, email, or role" />
+
+            <DataTable TItem="AppUser"
+                       Items="_filtered"
+                       Loading="_loading"
+                       PageSize="10"
+                       Caption="User directory"
+                       EmptyIcon="bi-people"
+                       EmptyTitle="No users found"
+                       EmptyMessage="Try clearing your search filter or add a new user.">
+                <Columns>
+                    <DataColumn TItem="AppUser" Title="Name" SortBy="u => u.FullName">
+                        <Template Context="u">
+                            <div class="vc-user-cell">
+                                <span class="vc-avatar vc-avatar--xs" aria-hidden="true">@u.Initials</span>
+                                <div>
+                                    <div class="vc-cell-cve">@u.FullName</div>
+                                    <div class="vc-cell-sub">@u.Team</div>
+                                </div>
+                            </div>
+                        </Template>
+                    </DataColumn>
+
+                    <DataColumn TItem="AppUser" Title="Email" SortBy="u => u.Email">
+                        <Template Context="u">@u.Email</Template>
+                    </DataColumn>
+
+                    <DataColumn TItem="AppUser" Title="Role" SortBy="u => u.Role">
+                        <Template Context="u">
+                            <span class="vc-status @RoleBadgeClass(u.Role)">@u.Role</span>
+                        </Template>
+                    </DataColumn>
+
+                    <DataColumn TItem="AppUser" Title="Status" SortBy="u => u.IsActive">
+                        <Template Context="u">
+                            <span class="vc-status @(u.IsActive ? "vc-status--closed" : "vc-status--accepted")">
+                                @(u.IsActive ? "Active" : "Disabled")
+                            </span>
+                        </Template>
+                    </DataColumn>
+
+                    <DataColumn TItem="AppUser" Title="Last login" SortBy="u => u.LastLogin">
+                        <Template Context="u">
+                            @(u.LastLogin.HasValue ? u.LastLogin.Value.ToString("d MMM yyyy, HH:mm") : "Never")
+                        </Template>
+                    </DataColumn>
+
+                    <DataColumn TItem="AppUser" Title="Actions">
+                        <Template Context="u">
+                            <div class="vc-action-row">
+                                <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => OpenEditModal(u)">Edit</button>
+                                <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => PromptToggle(u)">
+                                    @(u.IsActive ? "Disable" : "Enable")
+                                </button>
+                                <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => PromptReset(u)">Reset password</button>
+                            </div>
+                        </Template>
+                    </DataColumn>
+                </Columns>
+            </DataTable>
+        </section>
+
+        <aside class="vc-dash__side" aria-label="Role permissions summary">
+            <section class="vc-card">
+                <div class="vc-card__head"><h2>Role permissions</h2></div>
+                <div class="vc-perm-list">
+                    <div class="vc-perm-item">
+                        <span class="vc-status vc-status--open">Administrator</span>
+                        <p>Full access: manage users, Greenbone settings, SLA policies, audit logs, imports, and closures.</p>
+                    </div>
+                    <div class="vc-perm-item">
+                        <span class="vc-status vc-status--fixed">Security Analyst</span>
+                        <p>Import authorized Greenbone scans, rank findings, assign owners, nudge overdue items, and verify rescans.</p>
+                    </div>
+                    <div class="vc-perm-item">
+                        <span class="vc-status vc-status--accepted">Asset Owner</span>
+                        <p>View findings on owned assets, update remediation progress, and mark fixes ready for verification.</p>
+                    </div>
+                </div>
+            </section>
+        </aside>
+    </div>
+
+    @if (_showUserModal)
+    {
+        <div class="vc-modal-backdrop" @onclick="() => _showUserModal = false">
+            <div class="vc-modal" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+                <div class="vc-modal__head">
+                    <h2 class="vc-modal__title">@(_editingUser is null ? "Add user" : $"Edit {_editingUser.FullName}")</h2>
+                    <button type="button" class="vc-icon-btn" aria-label="Close" @onclick="() => _showUserModal = false">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="vc-modal__body">
+                    <div class="vc-form-grid">
+                        <div class="vc-field">
+                            <label for="usr-name">Full name</label>
+                            <input id="usr-name" class="vc-input" @bind="_formName" placeholder="Full name" />
+                        </div>
+                        <div class="vc-field">
+                            <label for="usr-email">Email</label>
+                            <input id="usr-email" type="email" class="vc-input" @bind="_formEmail" placeholder="name@vulntrack.local" />
+                        </div>
+                        <div class="vc-field">
+                            <label for="usr-role">Role</label>
+                            <select id="usr-role" class="vc-input" @bind="_formRole">
+                                <option value="@Roles.Administrator">@Roles.Administrator</option>
+                                <option value="@Roles.SecurityAnalyst">@Roles.SecurityAnalyst</option>
+                                <option value="@Roles.AssetOwner">@Roles.AssetOwner</option>
+                            </select>
+                        </div>
+                        <div class="vc-field">
+                            <label for="usr-team">Department / Team</label>
+                            <input id="usr-team" class="vc-input" @bind="_formTeam" placeholder="SOC / Network / Radiology IT" />
+                        </div>
+                    </div>
+                </div>
+                <div class="vc-modal__foot">
+                    <button type="button" class="vc-btn vc-btn--secondary" @onclick="() => _showUserModal = false">Cancel</button>
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick="SaveUser">Save user</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <ConfirmModal @bind-Visible="_showToggleModal"
+                  Title="@(_targetUser?.IsActive == true ? "Disable user account" : "Enable user account")"
+                  Message="@(_targetUser?.IsActive == true ? $"Disable {_targetUser.FullName}? They will no longer be able to sign in." : $"Re-enable {_targetUser?.FullName}?")"
+                  ConfirmText="@(_targetUser?.IsActive == true ? "Disable user" : "Enable user")"
+                  Danger="@(_targetUser?.IsActive == true)"
+                  OnConfirm="ConfirmToggle" />
+
+    <ConfirmModal @bind-Visible="_showResetModal"
+                  Title="Reset user password"
+                  Message="@($"Send a one-time password reset link to {_targetUser?.Email} and revoke active sessions?")"
+                  ConfirmText="Reset password"
+                  Danger="true"
+                  OnConfirm="ConfirmReset" />
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    private bool _loading = true;
+    private string? _search;
+    private List<AppUser> _filtered = new();
+
+    private bool _showUserModal;
+    private AppUser? _editingUser;
+    private string _formName = "";
+    private string _formEmail = "";
+    private string _formRole = Roles.AssetOwner;
+    private string _formTeam = "";
+
+    private bool _showToggleModal;
+    private bool _showResetModal;
+    private AppUser? _targetUser;
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        RefreshUsers();
+        if (RendererInfo.IsInteractive)
+        {
+            await Task.Delay(180);
+            _loading = false;
+        }
+    }
+
+    private void OnSearchChanged(string? val)
+    {
+        _search = val;
+        RefreshUsers();
+    }
+
+    private void RefreshUsers()
+    {
+        IEnumerable<AppUser> q = DummyData.Users;
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var t = _search.Trim();
+            q = q.Where(u =>
+                u.FullName.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                u.Email.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                u.Role.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                u.Team.Contains(t, StringComparison.OrdinalIgnoreCase));
+        }
+        _filtered = q.OrderBy(u => u.FullName).ToList();
+    }
+
+    private void OpenAddModal()
+    {
+        _editingUser = null;
+        _formName = "";
+        _formEmail = "";
+        _formRole = Roles.AssetOwner;
+        _formTeam = "";
+        _showUserModal = true;
+    }
+
+    private void OpenEditModal(AppUser u)
+    {
+        _editingUser = u;
+        _formName = u.FullName;
+        _formEmail = u.Email;
+        _formRole = u.Role;
+        _formTeam = u.Team;
+        _showUserModal = true;
+    }
+
+    private void SaveUser()
+    {
+        if (string.IsNullOrWhiteSpace(_formName) || string.IsNullOrWhiteSpace(_formEmail))
+        {
+            _toast?.Show("Full name and email are required.", ToastKind.Warning);
+            return;
+        }
+
+        if (_editingUser is null)
+        {
+            DummyData.Users.Add(new AppUser
+            {
+                Id = $"USR-{DummyData.Users.Count + 1:00}",
+                FullName = _formName.Trim(),
+                Email = _formEmail.Trim(),
+                Role = _formRole,
+                Team = string.IsNullOrWhiteSpace(_formTeam) ? "General" : _formTeam.Trim(),
+                IsActive = true
+            });
+            _toast?.Show($"Added user {_formName.Trim()}.", ToastKind.Success);
+        }
+        else
+        {
+            _editingUser.FullName = _formName.Trim();
+            _editingUser.Email = _formEmail.Trim();
+            _editingUser.Role = _formRole;
+            _editingUser.Team = _formTeam.Trim();
+            _toast?.Show($"Updated user {_editingUser.FullName}.", ToastKind.Success);
+        }
+
+        _showUserModal = false;
+        RefreshUsers();
+    }
+
+    private void PromptToggle(AppUser u)
+    {
+        _targetUser = u;
+        _showToggleModal = true;
+    }
+
+    private void ConfirmToggle()
+    {
+        if (_targetUser is null) return;
+        _targetUser.IsActive = !_targetUser.IsActive;
+        RefreshUsers();
+        _toast?.Show($"{_targetUser.FullName} is now {(_targetUser.IsActive ? "active" : "disabled")}.", ToastKind.Info);
+        _targetUser = null;
+    }
+
+    private void PromptReset(AppUser u)
+    {
+        _targetUser = u;
+        _showResetModal = true;
+    }
+
+    private void ConfirmReset()
+    {
+        if (_targetUser is null) return;
+        _toast?.Show($"Password reset initiated for {_targetUser.Email}.", ToastKind.Success);
+        _targetUser = null;
+    }
+
+    private static string RoleBadgeClass(string role) => role switch
+    {
+        Roles.Administrator => "vc-status--open",
+        Roles.SecurityAnalyst => "vc-status--fixed",
+        _ => "vc-status--accepted"
+    };
+}

@@ -1,0 +1,359 @@
+@page "/vulnerabilities"
+@rendermode InteractiveServer
+@attribute [Authorize]
+@inject VulnTrackDataService DataService
+@inject NavigationManager Nav
+@inject IJSRuntime JS
+@using System.Security.Claims
+@using System.Text
+
+<PageTitle>Vulnerabilities | VulnTrack</PageTitle>
+
+<PageHeader Title="Vulnerabilities"
+            Subtitle="@(_isOwner ? "Open and historical findings on assets you own" : "All tracked findings across authorized Greenbone scans")"
+            PrimaryText="Export CSV"
+            PrimaryIcon="bi-download"
+            OnPrimary="ExportCsvAsync" />
+
+<div class="vc-page">
+    <section class="vc-card">
+        <div class="vc-filters-row">
+            <div class="vc-filterbar__search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search" placeholder="Search CVE, title, asset, owner" value="@_search" @oninput="OnSearch" />
+            </div>
+
+            <select class="vc-select" aria-label="Filter by severity" @bind="_severityFilter" @bind:after="ApplyFilters">
+                <option value="">All severities</option>
+                @foreach (var s in Enum.GetValues<VulnerabilitySeverity>().OrderByDescending(x => x))
+                {
+                    <option value="@s">@s</option>
+                }
+            </select>
+
+            <select class="vc-select" aria-label="Filter by status" @bind="_statusFilter" @bind:after="ApplyFilters">
+                <option value="">All statuses</option>
+                @foreach (var st in Enum.GetValues<VulnerabilityStatus>())
+                {
+                    <option value="@st">@st.ToUiStatus().ToLabel()</option>
+                }
+            </select>
+
+            @if (!_isOwner)
+            {
+                <select class="vc-select" aria-label="Filter by owner" @bind="_ownerFilter" @bind:after="ApplyFilters">
+                    <option value="">All owners</option>
+                    @foreach (var u in _users)
+                    {
+                        <option value="@u.Id">@u.FullName</option>
+                    }
+                </select>
+            }
+
+            <select class="vc-select" aria-label="Filter by asset" @bind="_assetFilter" @bind:after="ApplyFilters">
+                <option value="">All assets</option>
+                @foreach (var asset in _assets)
+                {
+                    <option value="@asset">@asset</option>
+                }
+            </select>
+
+            <div class="vc-date-range">
+                <input type="date" class="vc-select" aria-label="Due date from" @bind="_dueFrom" @bind:after="ApplyFilters" />
+                <span>to</span>
+                <input type="date" class="vc-select" aria-label="Due date to" @bind="_dueTo" @bind:after="ApplyFilters" />
+            </div>
+
+            <FilterChip Label="Overdue only" Icon="bi-alarm" Active="_overdueOnly" OnClick="ToggleOverdue" />
+
+            <div class="vc-pagesize">
+                <label for="vc-ps">Rows</label>
+                <select id="vc-ps" class="vc-select" @bind="_pageSize">
+                    <option value="5">5</option>
+                    <option value="10">10</option>
+                    <option value="25">25</option>
+                    <option value="50">50</option>
+                </select>
+            </div>
+        </div>
+
+        @if (_selectedIds.Count > 0)
+        {
+            <div class="vc-bulk-bar">
+                <span><strong>@_selectedIds.Count</strong> selected</span>
+
+                <div class="vc-bulk-bar__group">
+                    <select class="vc-select" aria-label="Bulk assign owner" @bind="_bulkOwnerId">
+                        <option value="">Assign owner...</option>
+                        @foreach (var u in _users)
+                        {
+                            <option value="@u.Id">@u.FullName</option>
+                        }
+                    </select>
+                    <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" disabled="@string.IsNullOrEmpty(_bulkOwnerId)" @onclick="ApplyBulkOwnerAsync">Assign owner</button>
+                </div>
+
+                <div class="vc-bulk-bar__group">
+                    <select class="vc-select" aria-label="Bulk change status" @bind="_bulkStatus">
+                        <option value="">Change status...</option>
+                        <option value="@VulnerabilityStatus.Open">Open</option>
+                        <option value="@VulnerabilityStatus.InProgress">In Progress</option>
+                        <option value="@VulnerabilityStatus.FixedAwaitingVerification">Fixed, awaiting verification</option>
+                        <option value="@VulnerabilityStatus.AcceptedRisk">Accepted Risk</option>
+                    </select>
+                    <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" disabled="@string.IsNullOrEmpty(_bulkStatus)" @onclick="ApplyBulkStatusAsync">Change status</button>
+                </div>
+
+                <button type="button" class="vc-btn vc-btn--ghost vc-btn--sm" @onclick="() => _selectedIds.Clear()">Clear</button>
+            </div>
+        }
+
+        <DataTable TItem="VulnerabilityEntity"
+                   Items="_filtered"
+                   Loading="_loading"
+                   PageSize="_pageSize"
+                   OnRowClick="OpenDetail"
+                   Caption="Vulnerabilities list"
+                   EmptyTitle="No matching findings"
+                   EmptyMessage="Try clearing one or more filters.">
+            <Columns>
+                <DataColumn TItem="VulnerabilityEntity" Title="Select">
+                    <Template Context="v">
+                        <span @onclick:stopPropagation="true">
+                            <input type="checkbox"
+                                   aria-label="Select @v.CveId"
+                                   checked="@_selectedIds.Contains(v.Id)"
+                                   @onchange="e => ToggleSelect(v.Id, (bool)(e.Value ?? false))" />
+                        </span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="CVE ID" SortBy="v => v.CveId">
+                    <Template Context="v">
+                        <a class="vc-link vc-mono"
+                           href="/vulnerabilities/@v.Id"
+                           @onclick:stopPropagation="true">
+                            @v.CveId
+                        </a>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Title" SortBy="v => v.Title">
+                    <Template Context="v">
+                        <div class="vc-cell-finding">
+                            <div class="vc-cell-title" title="@v.Title" style="color:var(--vc-text)">@v.Title</div>
+                        </div>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Severity" SortBy="v => (int)v.Severity">
+                    <Template Context="v">
+                        <SeverityBadge Severity="v.Severity.ToUiSeverity()" />
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="CVSS" SortBy="v => v.CvssScore">
+                    <Template Context="v">
+                        <span class="vc-cell-cvss">@v.CvssScore.ToString("0.0")</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Asset" SortBy="v => v.Asset.Hostname">
+                    <Template Context="v">
+                        <span class="vc-mono">@v.Asset.Hostname</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Owner" SortBy="v => v.Owner?.FullName ?? string.Empty">
+                    <Template Context="v">@(v.Owner?.FullName ?? "Unassigned")</Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Due date" SortBy="v => v.DueDate">
+                    <Template Context="v">
+                        @{
+                            var overdue = v.IsOverdueUtc(DateTime.UtcNow);
+                        }
+                        <div class="@(overdue ? "vc-due--over" : "")">@v.DueDate.ToString("d MMM yyyy")</div>
+                        @if (overdue)
+                        {
+                            <span class="vc-due vc-due--over">@v.DaysOverdueUtc(DateTime.UtcNow)d overdue</span>
+                        }
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Status" SortBy="v => (int)v.Status">
+                    <Template Context="v">
+                        <StatusBadge Status="v.Status.ToUiStatus()" />
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="VulnerabilityEntity" Title="Actions">
+                    <Template Context="v">
+                        <a class="vc-btn vc-btn--secondary vc-btn--sm"
+                           href="/vulnerabilities/@v.Id"
+                           @onclick:stopPropagation="true">
+                            Inspect
+                        </a>
+                    </Template>
+                </DataColumn>
+            </Columns>
+        </DataTable>
+    </section>
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    [SupplyParameterFromQuery(Name = "filter")] public string? QueryFilter { get; set; }
+    [SupplyParameterFromQuery(Name = "severity")] public string? QuerySeverity { get; set; }
+
+    private bool _loading = true;
+    private bool _isOwner;
+    private string _currentUserId = "";
+
+    private string? _search;
+    private string _severityFilter = "";
+    private string _statusFilter = "";
+    private string _ownerFilter = "";
+    private string _assetFilter = "";
+    private DateOnly? _dueFrom;
+    private DateOnly? _dueTo;
+    private bool _overdueOnly;
+    private int _pageSize = 10;
+
+    private List<ApplicationUser> _users = new();
+    private List<string> _assets = new();
+    private List<VulnerabilityEntity> _scope = new();
+    private List<VulnerabilityEntity> _filtered = new();
+
+    private readonly HashSet<int> _selectedIds = new();
+    private string _bulkOwnerId = "";
+    private string _bulkStatus = "";
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState;
+        _isOwner = auth.User.IsInRole(Roles.AssetOwner);
+        _currentUserId = auth.User.FindFirst(ClaimTypes.NameIdentifier)?.Value ?? "";
+
+        if (string.Equals(QueryFilter, "overdue", StringComparison.OrdinalIgnoreCase))
+            _overdueOnly = true;
+
+        if (!string.IsNullOrWhiteSpace(QuerySeverity) && Enum.TryParse<VulnerabilitySeverity>(QuerySeverity, true, out var parsedSev))
+            _severityFilter = parsedSev.ToString();
+
+        _users = await DataService.GetActiveUsersAsync();
+        await ReloadAsync();
+        _loading = false;
+    }
+
+    private async Task ReloadAsync()
+    {
+        _scope = await DataService.GetVulnerabilitiesAsync(_currentUserId, _isOwner);
+        _assets = _scope.Select(v => v.Asset.Hostname).Distinct().OrderBy(x => x).ToList();
+        ApplyFilters();
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString();
+        ApplyFilters();
+    }
+
+    private void ToggleOverdue()
+    {
+        _overdueOnly = !_overdueOnly;
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        var now = DateTime.UtcNow;
+        IEnumerable<VulnerabilityEntity> q = _scope;
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var term = _search.Trim();
+            q = q.Where(v =>
+                v.CveId.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                v.Title.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                v.Asset.Hostname.Contains(term, StringComparison.OrdinalIgnoreCase) ||
+                (v.Owner?.FullName.Contains(term, StringComparison.OrdinalIgnoreCase) ?? false));
+        }
+
+        if (Enum.TryParse<VulnerabilitySeverity>(_severityFilter, out var sev))
+            q = q.Where(v => v.Severity == sev);
+
+        if (Enum.TryParse<VulnerabilityStatus>(_statusFilter, out var st))
+            q = q.Where(v => v.Status == st);
+
+        if (!string.IsNullOrWhiteSpace(_ownerFilter))
+            q = q.Where(v => v.OwnerUserId == _ownerFilter);
+
+        if (!string.IsNullOrWhiteSpace(_assetFilter))
+            q = q.Where(v => v.Asset.Hostname == _assetFilter);
+
+        if (_dueFrom.HasValue)
+            q = q.Where(v => DateOnly.FromDateTime(v.DueDate) >= _dueFrom.Value);
+
+        if (_dueTo.HasValue)
+            q = q.Where(v => DateOnly.FromDateTime(v.DueDate) <= _dueTo.Value);
+
+        if (_overdueOnly)
+            q = q.Where(v => v.IsOverdueUtc(now));
+
+        _filtered = q.OrderByDescending(v => v.Severity).ThenByDescending(v => v.CvssScore).ToList();
+    }
+
+    private void ToggleSelect(int id, bool selected)
+    {
+        if (selected) _selectedIds.Add(id);
+        else _selectedIds.Remove(id);
+    }
+
+    private async Task ApplyBulkOwnerAsync()
+    {
+        if (string.IsNullOrWhiteSpace(_bulkOwnerId)) return;
+        foreach (var id in _selectedIds)
+        {
+            await DataService.UpdateOwnerAsync(id, _bulkOwnerId, _currentUserId);
+        }
+        var count = _selectedIds.Count;
+        _selectedIds.Clear();
+        _bulkOwnerId = "";
+        await ReloadAsync();
+        _toast?.Show($"Assigned {count} findings to owner.", ToastKind.Success);
+    }
+
+    private async Task ApplyBulkStatusAsync()
+    {
+        if (!Enum.TryParse<VulnerabilityStatus>(_bulkStatus, out var nextStatus)) return;
+        foreach (var id in _selectedIds)
+        {
+            await DataService.UpdateStatusAsync(id, nextStatus, _currentUserId);
+        }
+        var count = _selectedIds.Count;
+        _selectedIds.Clear();
+        _bulkStatus = "";
+        await ReloadAsync();
+        _toast?.Show($"Updated status on {count} findings.", ToastKind.Success);
+    }
+
+    private void OpenDetail(VulnerabilityEntity v) => Nav.NavigateTo($"/vulnerabilities/{v.Id}");
+
+    private async Task ExportCsvAsync()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Id,CVE,Title,Severity,CVSS,Asset,Port,Owner,DueDate,Status");
+        foreach (var v in _filtered)
+        {
+            sb.AppendLine($"{v.Id},\"{v.CveId}\",\"{v.Title.Replace("\"", "'")}\",{v.Severity},{v.CvssScore:0.0},\"{v.Asset.Hostname}\",{v.Port}/{v.Protocol},\"{v.Owner?.FullName ?? "Unassigned"}\",{v.DueDate:yyyy-MM-dd},\"{v.Status.ToUiStatus().ToLabel()}\"");
+        }
+        await using var mod = await JS.InvokeAsync<IJSObjectReference>("import", "./js/console.js");
+        await mod.InvokeVoidAsync("downloadTextFile", "vulntrack-vulnerabilities.csv", sb.ToString(), "text/csv;charset=utf-8");
+        _toast?.Show($"Exported {_filtered.Count} findings to CSV.", ToastKind.Info);
+    }
+}

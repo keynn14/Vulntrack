@@ -1,0 +1,4 @@
+flask>=3.0.3,<4.0
+gunicorn>=22.0.0,<24.0
+python-gvm>=24.8.0
+lxml>=5.2.0

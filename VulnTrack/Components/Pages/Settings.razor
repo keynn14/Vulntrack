@@ -1,0 +1,238 @@
+@page "/settings"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Administrator")]
+
+<PageTitle>Settings | VulnTrack</PageTitle>
+
+<PageHeader Title="Settings"
+            Subtitle="Configure Greenbone scanner connection, SLA policies, notifications, and import schedule" />
+
+<div class="vc-page">
+    <section class="vc-card">
+        <div class="vc-tabs" role="tablist" aria-label="Settings sections">
+            <button type="button" role="tab" class="vc-tab @(_tab == "greenbone" ? "is-active" : "")" aria-selected="@(_tab == "greenbone")" @onclick='() => _tab = "greenbone"'>
+                <i class="bi bi-plug" aria-hidden="true"></i> Greenbone connection
+            </button>
+            <button type="button" role="tab" class="vc-tab @(_tab == "sla" ? "is-active" : "")" aria-selected="@(_tab == "sla")" @onclick='() => _tab = "sla"'>
+                <i class="bi bi-clock" aria-hidden="true"></i> SLA rules
+            </button>
+            <button type="button" role="tab" class="vc-tab @(_tab == "notifications" ? "is-active" : "")" aria-selected="@(_tab == "notifications")" @onclick='() => _tab = "notifications"'>
+                <i class="bi bi-bell" aria-hidden="true"></i> Notifications
+            </button>
+            <button type="button" role="tab" class="vc-tab @(_tab == "import" ? "is-active" : "")" aria-selected="@(_tab == "import")" @onclick='() => _tab = "import"'>
+                <i class="bi bi-cloud-arrow-up" aria-hidden="true"></i> Import
+            </button>
+        </div>
+
+        <div class="vc-settings-panel">
+            @if (_tab == "greenbone")
+            {
+                <div class="vc-form-2col">
+                    <div class="vc-field">
+                        <label for="set-host">Greenbone host</label>
+                        <input id="set-host" class="vc-input" @bind="_gbHost" />
+                    </div>
+                    <div class="vc-field">
+                        <label for="set-port">GMP port</label>
+                        <input id="set-port" type="number" class="vc-input" @bind="_gbPort" />
+                    </div>
+                    <div class="vc-field">
+                        <label for="set-user">Service username</label>
+                        <input id="set-user" class="vc-input" @bind="_gbUser" />
+                    </div>
+                    <div class="vc-field">
+                        <label for="set-pass">Service password</label>
+                        <input id="set-pass" type="password" class="vc-input" @bind="_gbPass" />
+                    </div>
+                </div>
+
+                @if (!string.IsNullOrWhiteSpace(_connResult))
+                {
+                    <p class="vc-validation vc-validation--ok" style="margin-top:14px">
+                        <i class="bi bi-check-circle" aria-hidden="true"></i>
+                        <span>@_connResult</span>
+                    </p>
+                }
+
+                <div class="vc-btn-row" style="margin-top:18px">
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick='() => SaveTab("Greenbone connection")'>Save</button>
+                    <button type="button" class="vc-btn vc-btn--secondary" @onclick="ResetGreenbone">Reset</button>
+                    <button type="button" class="vc-btn vc-btn--secondary" disabled="@_testing" @onclick="TestConnectionAsync">
+                        <i class="bi bi-plug" aria-hidden="true"></i>
+                        <span>@(_testing ? "Testing..." : "Test connection")</span>
+                    </button>
+                </div>
+            }
+            else if (_tab == "sla")
+            {
+                <div class="vc-form-2col">
+                    <div class="vc-field">
+                        <label for="sla-crit">Critical due days</label>
+                        <input id="sla-crit" type="number" min="1" class="vc-input" @bind="_slaCritical" />
+                    </div>
+                    <div class="vc-field">
+                        <label for="sla-high">High due days</label>
+                        <input id="sla-high" type="number" min="1" class="vc-input" @bind="_slaHigh" />
+                    </div>
+                    <div class="vc-field">
+                        <label for="sla-med">Medium due days</label>
+                        <input id="sla-med" type="number" min="1" class="vc-input" @bind="_slaMedium" />
+                    </div>
+                    <div class="vc-field">
+                        <label for="sla-low">Low due days</label>
+                        <input id="sla-low" type="number" min="1" class="vc-input" @bind="_slaLow" />
+                    </div>
+                </div>
+
+                <div class="vc-btn-row" style="margin-top:18px">
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick='() => SaveTab("SLA rules")'>Save</button>
+                    <button type="button" class="vc-btn vc-btn--secondary" @onclick="ResetSla">Reset</button>
+                </div>
+            }
+            else if (_tab == "notifications")
+            {
+                <div class="vc-form-grid" style="max-width:560px">
+                    <label class="vc-check">
+                        <input type="checkbox" @bind="_emailEnabled" />
+                        <span>Enable email notifications</span>
+                    </label>
+
+                    <div class="vc-field">
+                        <label for="not-rec">Recipients (comma-separated)</label>
+                        <input id="not-rec" class="vc-input" @bind="_recipients" disabled="@(!_emailEnabled)" />
+                    </div>
+
+                    <div class="vc-checks">
+                        <span class="vc-cell-cve" style="font-size:13px">Events that trigger notifications</span>
+                        <label class="vc-check">
+                            <input type="checkbox" @bind="_notifyCritical" disabled="@(!_emailEnabled)" />
+                            <span>Critical finding imported</span>
+                        </label>
+                        <label class="vc-check">
+                            <input type="checkbox" @bind="_notifyOverdue" disabled="@(!_emailEnabled)" />
+                            <span>SLA overdue breach</span>
+                        </label>
+                        <label class="vc-check">
+                            <input type="checkbox" @bind="_notifyRescan" disabled="@(!_emailEnabled)" />
+                            <span>Rescan verification result</span>
+                        </label>
+                        <label class="vc-check">
+                            <input type="checkbox" @bind="_notifyImportFail" disabled="@(!_emailEnabled)" />
+                            <span>Scan import failed</span>
+                        </label>
+                    </div>
+                </div>
+
+                <div class="vc-btn-row" style="margin-top:18px">
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick='() => SaveTab("Notifications")'>Save</button>
+                    <button type="button" class="vc-btn vc-btn--secondary" @onclick="ResetNotifications">Reset</button>
+                </div>
+            }
+            else
+            {
+                <div class="vc-form-grid" style="max-width:520px">
+                    <div class="vc-field">
+                        <label for="imp-time">Nightly schedule time (24h)</label>
+                        <input id="imp-time" type="time" class="vc-input" value="@_scheduleTime" @onchange="e => _scheduleTime = e.Value?.ToString() ?? _scheduleTime" />
+                    </div>
+
+                    <label class="vc-check">
+                        <input type="checkbox" @bind="_autoAssignByRegistry" />
+                        <span>Auto-assign owners by asset registry</span>
+                    </label>
+
+                    <div class="vc-notice">
+                        <i class="bi bi-shield-check" aria-hidden="true"></i>
+                        <span>Scheduled imports merge on CVE + asset + port and never auto-close findings without rescan verification.</span>
+                    </div>
+                </div>
+
+                <div class="vc-btn-row" style="margin-top:18px">
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick='() => SaveTab("Import schedule")'>Save</button>
+                    <button type="button" class="vc-btn vc-btn--secondary" @onclick="ResetImport">Reset</button>
+                </div>
+            }
+        </div>
+    </section>
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    private string _tab = "greenbone";
+    private bool _testing;
+    private string? _connResult;
+
+    private string _gbHost = "gvm-scanner.internal.local";
+    private int _gbPort = 9390;
+    private string _gbUser = "vulntrack-gmp";
+    private string _gbPass = "••••••••••••";
+
+    private int _slaCritical = 7;
+    private int _slaHigh = 14;
+    private int _slaMedium = 30;
+    private int _slaLow = 90;
+
+    private bool _emailEnabled = true;
+    private string _recipients = "soc@vulntrack.local, andrea.reyes@vulntrack.local";
+    private bool _notifyCritical = true;
+    private bool _notifyOverdue = true;
+    private bool _notifyRescan = true;
+    private bool _notifyImportFail = true;
+
+    private string _scheduleTime = "02:00";
+    private bool _autoAssignByRegistry = true;
+
+    private Toast? _toast;
+
+    private async Task TestConnectionAsync()
+    {
+        _testing = true;
+        await Task.Delay(400);
+        _testing = false;
+        _connResult = $"Connected to {_gbHost}:{_gbPort} as {_gbUser} (GMP 22.4, TLS 1.3 verified).";
+        _toast?.Show("Greenbone connection test succeeded.", ToastKind.Success);
+    }
+
+    private void SaveTab(string section)
+    {
+        _toast?.Show($"{section} settings saved.", ToastKind.Success);
+    }
+
+    private void ResetGreenbone()
+    {
+        _gbHost = "gvm-scanner.internal.local";
+        _gbPort = 9390;
+        _gbUser = "vulntrack-gmp";
+        _gbPass = "••••••••••••";
+        _connResult = null;
+        _toast?.Show("Greenbone connection settings reset to defaults.", ToastKind.Info);
+    }
+
+    private void ResetSla()
+    {
+        _slaCritical = 7;
+        _slaHigh = 14;
+        _slaMedium = 30;
+        _slaLow = 90;
+        _toast?.Show("SLA rules reset to defaults (7 / 14 / 30 / 90 days).", ToastKind.Info);
+    }
+
+    private void ResetNotifications()
+    {
+        _emailEnabled = true;
+        _recipients = "soc@vulntrack.local, andrea.reyes@vulntrack.local";
+        _notifyCritical = true;
+        _notifyOverdue = true;
+        _notifyRescan = true;
+        _notifyImportFail = true;
+        _toast?.Show("Notification preferences reset.", ToastKind.Info);
+    }
+
+    private void ResetImport()
+    {
+        _scheduleTime = "02:00";
+        _autoAssignByRegistry = true;
+        _toast?.Show("Import settings reset to defaults.", ToastKind.Info);
+    }
+}

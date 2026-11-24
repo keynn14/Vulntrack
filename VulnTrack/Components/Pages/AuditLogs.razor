@@ -1,0 +1,167 @@
+@page "/audit-logs"
+@rendermode InteractiveServer
+@attribute [Authorize(Roles = "Administrator")]
+@inject IJSRuntime JS
+@using System.Text
+
+<PageTitle>Audit Logs | VulnTrack</PageTitle>
+
+<PageHeader Title="Audit Logs"
+            Subtitle="Read-only record of imports, status changes, verifications, and administrative actions"
+            PrimaryText="Export CSV"
+            PrimaryIcon="bi-download"
+            OnPrimary="ExportCsvAsync" />
+
+<div class="vc-page">
+    <section class="vc-card">
+        <div class="vc-filters-row">
+            <div class="vc-filterbar__search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search" placeholder="Search action, target, details, IP" value="@_search" @oninput="OnSearch" />
+            </div>
+
+            <select class="vc-select" aria-label="Filter by user" @bind="_userFilter" @bind:after="ApplyFilters">
+                <option value="">All users</option>
+                @foreach (var actor in _actors)
+                {
+                    <option value="@actor">@actor</option>
+                }
+            </select>
+
+            <select class="vc-select" aria-label="Filter by action type" @bind="_typeFilter" @bind:after="ApplyFilters">
+                <option value="">All action types</option>
+                @foreach (var type in _types)
+                {
+                    <option value="@type">@type</option>
+                }
+            </select>
+
+            <div class="vc-date-range">
+                <input type="date" class="vc-select" aria-label="Date from" @bind="_fromDate" @bind:after="ApplyFilters" />
+                <span>to</span>
+                <input type="date" class="vc-select" aria-label="Date to" @bind="_toDate" @bind:after="ApplyFilters" />
+            </div>
+        </div>
+
+        <DataTable TItem="AuditEntry"
+                   Items="_filtered"
+                   Loading="_loading"
+                   PageSize="10"
+                   Caption="Audit logs"
+                   EmptyIcon="bi-journal-text"
+                   EmptyTitle="No audit events match"
+                   EmptyMessage="Adjust your date range or filters to see recorded events.">
+            <Columns>
+                <DataColumn TItem="AuditEntry" Title="Timestamp" SortBy="a => a.Timestamp">
+                    <Template Context="a">
+                        <span class="vc-mono">@a.Timestamp.ToString("yyyy-MM-dd HH:mm")</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="AuditEntry" Title="User" SortBy="a => a.Actor">
+                    <Template Context="a">@a.Actor</Template>
+                </DataColumn>
+
+                <DataColumn TItem="AuditEntry" Title="Action" SortBy="a => a.Action">
+                    <Template Context="a">
+                        <span class="vc-count-pill">@a.Action</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="AuditEntry" Title="Target" SortBy="a => a.Target">
+                    <Template Context="a">
+                        <span class="vc-mono">@a.Target</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="AuditEntry" Title="Details" SortBy="a => a.Details">
+                    <Template Context="a">@a.Details</Template>
+                </DataColumn>
+
+                <DataColumn TItem="AuditEntry" Title="IP address" SortBy="a => a.IpAddress">
+                    <Template Context="a">
+                        <span class="vc-mono">@a.IpAddress</span>
+                    </Template>
+                </DataColumn>
+            </Columns>
+        </DataTable>
+    </section>
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    private bool _loading = true;
+    private string? _search;
+    private string _userFilter = "";
+    private string _typeFilter = "";
+    private DateOnly? _fromDate;
+    private DateOnly? _toDate;
+
+    private List<string> _actors = new();
+    private List<string> _types = new();
+    private List<AuditEntry> _filtered = new();
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        _actors = DummyData.AuditLog.Select(a => a.Actor).Distinct().OrderBy(x => x).ToList();
+        _types = DummyData.AuditLog.Select(a => a.ActionType).Distinct().OrderBy(x => x).ToList();
+        ApplyFilters();
+
+        if (RendererInfo.IsInteractive)
+        {
+            await Task.Delay(180);
+            _loading = false;
+        }
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString();
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<AuditEntry> q = DummyData.AuditLog;
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var t = _search.Trim();
+            q = q.Where(a =>
+                a.Action.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.Target.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.Details.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.IpAddress.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.Actor.Contains(t, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_userFilter))
+            q = q.Where(a => a.Actor == _userFilter);
+
+        if (!string.IsNullOrWhiteSpace(_typeFilter))
+            q = q.Where(a => a.ActionType == _typeFilter);
+
+        if (_fromDate.HasValue)
+            q = q.Where(a => DateOnly.FromDateTime(a.Timestamp) >= _fromDate.Value);
+
+        if (_toDate.HasValue)
+            q = q.Where(a => DateOnly.FromDateTime(a.Timestamp) <= _toDate.Value);
+
+        _filtered = q.OrderByDescending(a => a.Timestamp).ToList();
+    }
+
+    private async Task ExportCsvAsync()
+    {
+        var sb = new StringBuilder();
+        sb.AppendLine("Timestamp,User,Action,Target,Details,IpAddress");
+        foreach (var a in _filtered)
+        {
+            sb.AppendLine($"{a.Timestamp:yyyy-MM-dd HH:mm},\"{a.Actor}\",\"{a.Action}\",\"{a.Target}\",\"{a.Details.Replace("\"", "'")}\",{a.IpAddress}");
+        }
+        await using var mod = await JS.InvokeAsync<IJSObjectReference>("import", "./js/console.js");
+        await mod.InvokeVoidAsync("downloadTextFile", "vulntrack-audit-logs.csv", sb.ToString(), "text/csv;charset=utf-8");
+        _toast?.Show($"Exported {_filtered.Count} audit entries to CSV.", ToastKind.Info);
+    }
+}

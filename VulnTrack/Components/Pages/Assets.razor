@@ -1,0 +1,381 @@
+@page "/assets"
+@rendermode InteractiveServer
+@attribute [Authorize]
+
+<PageTitle>Assets | VulnTrack</PageTitle>
+
+<PageHeader Title="Assets"
+            Subtitle="Registered hosts, ownership, business criticality, and open finding counts"
+            PrimaryText="@(_isOwner ? null : "Add asset")"
+            PrimaryIcon="bi-plus-lg"
+            OnPrimary="OpenAddModal" />
+
+<div class="vc-page">
+    <section class="vc-card">
+        <div class="vc-filters-row">
+            <div class="vc-filterbar__search">
+                <i class="bi bi-search" aria-hidden="true"></i>
+                <input type="search" placeholder="Search hostname, IP, OS, owner" value="@_search" @oninput="OnSearch" />
+            </div>
+
+            <select class="vc-select" aria-label="Filter by department" @bind="_deptFilter" @bind:after="ApplyFilters">
+                <option value="">All departments</option>
+                @foreach (var dept in _departments)
+                {
+                    <option value="@dept">@dept</option>
+                }
+            </select>
+
+            <select class="vc-select" aria-label="Filter by criticality" @bind="_critFilter" @bind:after="ApplyFilters">
+                <option value="">All criticalities</option>
+                @foreach (var c in Enum.GetValues<BusinessImpact>())
+                {
+                    <option value="@c">@c</option>
+                }
+            </select>
+        </div>
+
+        <DataTable TItem="Asset"
+                   Items="_filtered"
+                   Loading="_loading"
+                   PageSize="10"
+                   OnRowClick="OpenDrawer"
+                   Caption="Asset inventory"
+                   EmptyIcon="bi-hdd-stack"
+                   EmptyTitle="No assets found"
+                   EmptyMessage="Adjust your search or add a new authorized asset.">
+            <Columns>
+                <DataColumn TItem="Asset" Title="Hostname" SortBy="a => a.Hostname">
+                    <Template Context="a">
+                        <span class="vc-mono vc-cell-cve">@a.Hostname</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="IP" SortBy="a => a.IpAddress">
+                    <Template Context="a">
+                        <span class="vc-mono">@a.IpAddress</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="OS" SortBy="a => a.OperatingSystem">
+                    <Template Context="a">@a.OperatingSystem</Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="Department" SortBy="a => a.Team">
+                    <Template Context="a">@a.Team</Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="Criticality" SortBy="a => (int)a.Criticality">
+                    <Template Context="a">
+                        <span class="vc-sev vc-sev--@CriticalityKey(a.Criticality)">
+                            <span class="vc-sev__dot" aria-hidden="true"></span>
+                            @a.Criticality
+                        </span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="Owner" SortBy="a => a.Owner">
+                    <Template Context="a">@a.Owner</Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="Open findings" SortBy="a => OpenCountFor(a.Hostname)">
+                    <Template Context="a">
+                        <span class="vc-count-pill">@OpenCountFor(a.Hostname)</span>
+                    </Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="Last scanned" SortBy="a => a.LastScanned">
+                    <Template Context="a">@a.LastScanned.ToString("d MMM yyyy")</Template>
+                </DataColumn>
+
+                <DataColumn TItem="Asset" Title="Actions">
+                    <Template Context="a">
+                        <div class="vc-action-row" @onclick:stopPropagation="true">
+                            <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => OpenDrawer(a)">Findings</button>
+                            @if (!_isOwner)
+                            {
+                                <button type="button" class="vc-btn vc-btn--secondary vc-btn--sm" @onclick="() => OpenEditModal(a)">Edit</button>
+                            }
+                        </div>
+                    </Template>
+                </DataColumn>
+            </Columns>
+        </DataTable>
+    </section>
+
+    @if (_drawerAsset is not null)
+    {
+        var findings = DummyData.Vulnerabilities
+            .Where(v => v.AssetName == _drawerAsset.Hostname)
+            .OrderBy(v => v.Severity)
+            .ThenByDescending(v => v.Cvss)
+            .ToList();
+
+        <div class="vc-drawer-backdrop" @onclick="() => _drawerAsset = null">
+            <aside class="vc-drawer" role="dialog" aria-modal="true" aria-label="Asset findings" @onclick:stopPropagation="true">
+                <div class="vc-drawer__head">
+                    <div>
+                        <h2 class="vc-mono">@_drawerAsset.Hostname</h2>
+                        <p class="vc-cell-sub">@_drawerAsset.IpAddress · @_drawerAsset.OperatingSystem · @_drawerAsset.Team</p>
+                    </div>
+                    <button type="button" class="vc-icon-btn" aria-label="Close drawer" @onclick="() => _drawerAsset = null">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+
+                <div class="vc-drawer__body">
+                    @if (!string.IsNullOrWhiteSpace(_drawerAsset.BusinessImpactNotes))
+                    {
+                        <div class="vc-notice" style="margin-bottom:16px">
+                            <i class="bi bi-info-circle" aria-hidden="true"></i>
+                            <span>@_drawerAsset.BusinessImpactNotes</span>
+                        </div>
+                    }
+
+                    <h3 style="font-size:14px;margin-bottom:12px">Findings (@findings.Count)</h3>
+
+                    @if (findings.Count == 0)
+                    {
+                        <EmptyState Icon="bi-check2-circle" Title="No recorded findings" Message="This asset has no active or historical findings." />
+                    }
+                    else
+                    {
+                        <div class="vc-side-list">
+                            @foreach (var f in findings)
+                            {
+                                var key = string.Equals(f.Cve, "N/A", StringComparison.OrdinalIgnoreCase) ? f.Id : f.Cve;
+                                <div class="vc-queue-item">
+                                    <div class="vc-queue-item__top">
+                                        <a class="vc-link vc-mono" href="/vulnerabilities/@key">@f.Cve</a>
+                                        <SeverityBadge Severity="f.Severity" />
+                                    </div>
+                                    <div style="margin-top:4px;font-size:13px">@f.Title</div>
+                                    <div class="vc-queue-item__top" style="margin-top:6px">
+                                        <StatusBadge Status="f.Status" />
+                                        <span class="vc-cell-sub">Due @f.DueDate.ToString("d MMM")</span>
+                                    </div>
+                                </div>
+                            }
+                        </div>
+                    }
+                </div>
+            </aside>
+        </div>
+    }
+
+    @if (_showModal)
+    {
+        <div class="vc-modal-backdrop" @onclick="CloseModal">
+            <div class="vc-modal vc-modal--lg" role="dialog" aria-modal="true" @onclick:stopPropagation="true">
+                <div class="vc-modal__head">
+                    <h2 class="vc-modal__title">@(_editingAsset is null ? "Add asset" : $"Edit {_editingAsset.Hostname}")</h2>
+                    <button type="button" class="vc-icon-btn" aria-label="Close" @onclick="CloseModal">
+                        <i class="bi bi-x-lg" aria-hidden="true"></i>
+                    </button>
+                </div>
+                <div class="vc-modal__body">
+                    <div class="vc-form-2col">
+                        <div class="vc-field">
+                            <label for="ast-host">Hostname</label>
+                            <input id="ast-host" class="vc-input" @bind="_formHostname" placeholder="srv-app-01" />
+                        </div>
+                        <div class="vc-field">
+                            <label for="ast-ip">IP address</label>
+                            <input id="ast-ip" class="vc-input" @bind="_formIp" placeholder="10.20.4.15" />
+                        </div>
+                        <div class="vc-field">
+                            <label for="ast-os">Operating system</label>
+                            <input id="ast-os" class="vc-input" @bind="_formOs" placeholder="Ubuntu 24.04 LTS" />
+                        </div>
+                        <div class="vc-field">
+                            <label for="ast-dept">Department</label>
+                            <input id="ast-dept" class="vc-input" @bind="_formDept" placeholder="Network" />
+                        </div>
+                        <div class="vc-field">
+                            <label for="ast-crit">Criticality</label>
+                            <select id="ast-crit" class="vc-input" @bind="_formCriticality">
+                                @foreach (var c in Enum.GetValues<BusinessImpact>())
+                                {
+                                    <option value="@c">@c</option>
+                                }
+                            </select>
+                        </div>
+                        <div class="vc-field">
+                            <label for="ast-owner">Owner</label>
+                            <input id="ast-owner" class="vc-input" @bind="_formOwner" placeholder="Maria Santos" />
+                        </div>
+                    </div>
+                    <div class="vc-field" style="margin-top:12px">
+                        <label for="ast-notes">Business impact notes</label>
+                        <textarea id="ast-notes" class="vc-input" rows="3" @bind="_formNotes" placeholder="Describe the system's operational criticality and service dependencies"></textarea>
+                    </div>
+                </div>
+                <div class="vc-modal__foot">
+                    <button type="button" class="vc-btn vc-btn--secondary" @onclick="CloseModal">Cancel</button>
+                    <button type="button" class="vc-btn vc-btn--primary" @onclick="SaveAsset">Save asset</button>
+                </div>
+            </div>
+        </div>
+    }
+
+    <Toast @ref="_toast" />
+</div>
+
+@code {
+    [CascadingParameter] private Task<AuthenticationState> AuthState { get; set; } = default!;
+
+    private bool _loading = true;
+    private bool _isOwner;
+    private string _userName = "";
+
+    private string? _search;
+    private string _deptFilter = "";
+    private string _critFilter = "";
+    private List<string> _departments = new();
+    private List<Asset> _filtered = new();
+
+    private Asset? _drawerAsset;
+    private bool _showModal;
+    private Asset? _editingAsset;
+    private string _formHostname = "";
+    private string _formIp = "";
+    private string _formOs = "";
+    private string _formDept = "";
+    private BusinessImpact _formCriticality = BusinessImpact.High;
+    private string _formOwner = "";
+    private string _formNotes = "";
+    private Toast? _toast;
+
+    protected override async Task OnInitializedAsync()
+    {
+        var auth = await AuthState;
+        _isOwner = auth.User.IsInRole(Roles.AssetOwner);
+        _userName = auth.User.Identity?.Name ?? "";
+
+        RefreshLists();
+        if (RendererInfo.IsInteractive)
+        {
+            await Task.Delay(200);
+            _loading = false;
+        }
+    }
+
+    private void RefreshLists()
+    {
+        _departments = DummyData.Assets.Select(a => a.Team).Distinct().OrderBy(x => x).ToList();
+        ApplyFilters();
+    }
+
+    private void OnSearch(ChangeEventArgs e)
+    {
+        _search = e.Value?.ToString();
+        ApplyFilters();
+    }
+
+    private void ApplyFilters()
+    {
+        IEnumerable<Asset> q = _isOwner
+            ? DummyData.Assets.Where(a => string.Equals(a.Owner, _userName, StringComparison.OrdinalIgnoreCase))
+            : DummyData.Assets;
+
+        if (!string.IsNullOrWhiteSpace(_search))
+        {
+            var t = _search.Trim();
+            q = q.Where(a =>
+                a.Hostname.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.IpAddress.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.OperatingSystem.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.Owner.Contains(t, StringComparison.OrdinalIgnoreCase) ||
+                a.Team.Contains(t, StringComparison.OrdinalIgnoreCase));
+        }
+
+        if (!string.IsNullOrWhiteSpace(_deptFilter))
+            q = q.Where(a => a.Team == _deptFilter);
+
+        if (Enum.TryParse<BusinessImpact>(_critFilter, out var crit))
+            q = q.Where(a => a.Criticality == crit);
+
+        _filtered = q.OrderBy(a => a.Criticality).ThenBy(a => a.Hostname).ToList();
+    }
+
+    private void OpenDrawer(Asset asset) => _drawerAsset = asset;
+
+    private void OpenAddModal()
+    {
+        _editingAsset = null;
+        _formHostname = "";
+        _formIp = "";
+        _formOs = "";
+        _formDept = "";
+        _formCriticality = BusinessImpact.High;
+        _formOwner = "";
+        _formNotes = "";
+        _showModal = true;
+    }
+
+    private void OpenEditModal(Asset a)
+    {
+        _editingAsset = a;
+        _formHostname = a.Hostname;
+        _formIp = a.IpAddress;
+        _formOs = a.OperatingSystem;
+        _formDept = a.Team;
+        _formCriticality = a.Criticality;
+        _formOwner = a.Owner;
+        _formNotes = a.BusinessImpactNotes;
+        _showModal = true;
+    }
+
+    private void CloseModal() => _showModal = false;
+
+    private void SaveAsset()
+    {
+        if (string.IsNullOrWhiteSpace(_formHostname) || string.IsNullOrWhiteSpace(_formIp))
+        {
+            _toast?.Show("Hostname and IP address are required.", ToastKind.Warning);
+            return;
+        }
+
+        if (_editingAsset is null)
+        {
+            DummyData.Assets.Insert(0, new Asset
+            {
+                Id = $"AST-{DummyData.Assets.Count + 1:00}",
+                Hostname = _formHostname.Trim(),
+                IpAddress = _formIp.Trim(),
+                OperatingSystem = string.IsNullOrWhiteSpace(_formOs) ? "Linux" : _formOs.Trim(),
+                Team = string.IsNullOrWhiteSpace(_formDept) ? "Infrastructure" : _formDept.Trim(),
+                Criticality = _formCriticality,
+                Owner = string.IsNullOrWhiteSpace(_formOwner) ? "Unassigned" : _formOwner.Trim(),
+                LastScanned = DummyData.Today,
+                BusinessImpactNotes = _formNotes.Trim()
+            });
+            _toast?.Show($"Added asset {_formHostname.Trim()}.", ToastKind.Success);
+        }
+        else
+        {
+            _editingAsset.Hostname = _formHostname.Trim();
+            _editingAsset.IpAddress = _formIp.Trim();
+            _editingAsset.OperatingSystem = _formOs.Trim();
+            _editingAsset.Team = _formDept.Trim();
+            _editingAsset.Criticality = _formCriticality;
+            _editingAsset.Owner = _formOwner.Trim();
+            _editingAsset.BusinessImpactNotes = _formNotes.Trim();
+            _toast?.Show($"Updated asset {_editingAsset.Hostname}.", ToastKind.Success);
+        }
+
+        _showModal = false;
+        RefreshLists();
+    }
+
+    private static int OpenCountFor(string hostname) =>
+        DummyData.Vulnerabilities.Count(v => v.AssetName == hostname && v.IsActive);
+
+    private static string CriticalityKey(BusinessImpact impact) => impact switch
+    {
+        BusinessImpact.Critical => "critical",
+        BusinessImpact.High => "high",
+        BusinessImpact.Medium => "medium",
+        _ => "low"
+    };
+}

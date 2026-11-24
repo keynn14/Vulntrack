@@ -1,0 +1,12 @@
+<span class="vc-sev vc-sev--@Severity.CssKey()">
+    @if (ShowDot)
+    {
+        <span class="vc-sev__dot" aria-hidden="true"></span>
+    }
+    @Severity
+</span>
+
+@code {
+    [Parameter] public Severity Severity { get; set; }
+    [Parameter] public bool ShowDot { get; set; } = true;
+}

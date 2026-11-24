@@ -1,0 +1,65 @@
+@if (Visible)
+{
+    <div class="vc-modal-backdrop" @onclick="Cancel" @onkeydown="OnKeyDown" tabindex="-1">
+        <div class="vc-modal"
+             role="dialog"
+             aria-modal="true"
+             aria-labelledby="@_titleId"
+             @onclick:stopPropagation="true">
+            <div class="vc-modal__head">
+                <h2 id="@_titleId" class="vc-modal__title">@Title</h2>
+                <button type="button" class="vc-icon-btn" aria-label="Close dialog" @onclick="Cancel">
+                    <i class="bi bi-x-lg" aria-hidden="true"></i>
+                </button>
+            </div>
+            <div class="vc-modal__body">
+                @if (!string.IsNullOrWhiteSpace(Message))
+                {
+                    <p>@Message</p>
+                }
+                @ChildContent
+            </div>
+            <div class="vc-modal__foot">
+                <button type="button" class="vc-btn vc-btn--secondary" @onclick="Cancel">@CancelText</button>
+                <button type="button"
+                        class="vc-btn @(Danger ? "vc-btn--danger" : "vc-btn--primary")"
+                        @onclick="Confirm">
+                    @ConfirmText
+                </button>
+            </div>
+        </div>
+    </div>
+}
+
+@code {
+    private readonly string _titleId = $"vc-modal-{Guid.NewGuid():N}";
+
+    [Parameter] public bool Visible { get; set; }
+    [Parameter] public EventCallback<bool> VisibleChanged { get; set; }
+    [Parameter] public string Title { get; set; } = "Confirm action";
+    [Parameter] public string? Message { get; set; }
+    [Parameter] public RenderFragment? ChildContent { get; set; }
+    [Parameter] public string ConfirmText { get; set; } = "Confirm";
+    [Parameter] public string CancelText { get; set; } = "Cancel";
+    [Parameter] public bool Danger { get; set; } = true;
+    [Parameter] public EventCallback OnConfirm { get; set; }
+
+    private async Task Cancel()
+    {
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task Confirm()
+    {
+        await OnConfirm.InvokeAsync();
+        await VisibleChanged.InvokeAsync(false);
+    }
+
+    private async Task OnKeyDown(KeyboardEventArgs e)
+    {
+        if (e.Key == "Escape")
+        {
+            await Cancel();
+        }
+    }
+}
